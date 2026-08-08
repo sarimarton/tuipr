@@ -8,19 +8,19 @@
 // a released `bin` that does nothing is worse than no release at all.
 //
 // It is deliberately dependency-free and prints to stderr with a non-zero
-// exit, so a script that shells out to `tuidash` fails loudly rather than
+// exit, so a script that shells out to `tuipr` fails loudly rather than
 // appearing to succeed.
 
 process.stderr.write(
   [
-    'tuidash is not released yet — this is a reserved package name.',
+    'tuipr is not released yet — this is a reserved package name.',
     '',
     'The tool is a terminal review workstation for agent-generated pull',
     'requests: a PR queue with computed landability, hunk-level diff review,',
     'budgeted AI review runs, and approvals that leave an attestation in the',
     'audit trail.',
     '',
-    'Progress and release notes: https://github.com/sarimarton/tuidash',
+    'Progress and release notes: https://github.com/sarimarton/tuipr',
     '',
   ].join('\n'),
 )

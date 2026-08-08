@@ -1,10 +1,10 @@
-# tuidash
+# tuipr
 
 **Terminal review workstation for agent-generated pull requests.**
 
 Coding agents can open PRs faster than you can read them. The bottleneck is no
 longer writing code or even reviewing mechanics — it is human attention and
-spend discipline. tuidash is a TUI that puts a human gate in front of the
+spend discipline. tuipr is a TUI that puts a human gate in front of the
 merge: a PR queue with computed landability, hunk-level diff review, budgeted
 AI review runs, and approvals that leave an attestation in the audit trail.
 

@@ -1,5 +1,5 @@
 {
-  "name": "tuidash",
+  "name": "tuipr",
   "version": "0.0.1",
   "description": "Terminal review workstation for agent-generated PRs — budgeted AI review, merge gates, attestation",
   "keywords": [
@@ -11,19 +11,19 @@
     "ai-review",
     "merge-queue"
   ],
-  "homepage": "https://github.com/sarimarton/tuidash#readme",
+  "homepage": "https://github.com/sarimarton/tuipr#readme",
   "bugs": {
-    "url": "https://github.com/sarimarton/tuidash/issues"
+    "url": "https://github.com/sarimarton/tuipr/issues"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/sarimarton/tuidash.git"
+    "url": "git+https://github.com/sarimarton/tuipr.git"
   },
   "license": "MIT",
   "author": "Márton Sári",
   "type": "module",
   "bin": {
-    "tuidash": "bin/tuidash.mjs"
+    "tuipr": "bin/tuipr.mjs"
   },
   "files": [
     "bin",
