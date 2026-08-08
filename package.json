@@ -27,9 +27,18 @@
   },
   "files": [
     "bin",
+    "src",
     "README.md",
     "LICENSE"
   ],
+  "dependencies": {
+    "hunkdiff": "0.18.0",
+    "ink": "^7.1.1",
+    "react": "^19.2.8"
+  },
+  "optionalDependencies": {
+    "node-pty": "^1.1.0"
+  },
   "engines": {
     "node": ">=20"
   }
