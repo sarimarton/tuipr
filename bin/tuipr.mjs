@@ -1,15 +1,16 @@
 #!/usr/bin/env node
 
-// tuipr — a telepített parancs belépési pontja.
+// tuipr — the entry point of the installed command.
 //
-// Szándékosan vékony: a logika a `src/tui.mjs`-ben él, ez csak elindítja. NEM
-// az entry-heurisztikára bízzuk magunkat (`import.meta.url === argv[1]`), mert
-// telepítve ez a fájl a main, nem a `src/tui.mjs` — az ottani `isMain` tehát
-// hamis lenne, és a TUI némán, 0 bájt kimenettel térne vissza. Ezért expliciten
-// a `main()`-t hívjuk.
+// Deliberately thin: the logic lives in `src/tui.mjs`, this only starts it. It
+// does NOT rely on the entry heuristic (`import.meta.url === argv[1]`), because
+// once installed THIS file is the main module, not `src/tui.mjs` — so the
+// `isMain` check over there would be false, and the TUI would return silently
+// with zero bytes of output. Hence the explicit call to `main()`.
 //
-// A HIBAKEZELÉS HANGOS: minden váratlan hiba teljes stack trace-szel dobódik.
-// Néma exit-ág nincs — az a hibaosztály itt már egyszer élesben harapott.
+// ERROR HANDLING IS LOUD: every unexpected error is reported with its full
+// stack trace. There is no silent exit branch — that error class has already
+// bitten this project in production once.
 
 import process from 'node:process'
 import { main } from '../src/tui.mjs'

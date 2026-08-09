@@ -2346,7 +2346,7 @@ export function App({
         // translated the error into a message (`noActiveSessionMessage`) — the
         // structured `res` object doesn't reach here. The anchor is OUR OWN,
         // constant sentence opener, not hunk's text that shifts with version changes.
-        if (!/nincs élő hunk-session/.test(String(hunkError.message ?? ''))) throw hunkError
+        if (!/no active hunk session/.test(String(hunkError.message ?? ''))) throw hunkError
         const cached = cacheAiFindings(cache.current, row.number)
         if (!cached || !Array.isArray(cached.findings) || cached.findings.length === 0) {
           // NEITHER SOURCE EXISTS: the ORIGINAL, actionable message propagates
@@ -3832,6 +3832,16 @@ export function App({
     // THE FACT OF A LEFTOVER MARKER COMES FROM BASH'S OUTPUT: it was MEASURED
     // there (grep), so the TUI doesn't re-measure, just reports. The
     // `needs-decision` case is the user's to handle.
+    // THESE TWO PATTERNS ARE STILL HUNGARIAN, DELIBERATELY, AND MUST STAY THAT
+    // WAY UNTIL THEIR PRODUCER MOVES. They match the output of the measurement
+    // script, which has not been generalized and is not shipped with this
+    // repository (see ROADMAP: "What still calls the original script"). The
+    // producer's text is Hungarian, so an English pattern here would match
+    // nothing — translating them would not fix anything, it would only hide
+    // that this path is waiting on the script.
+    //
+    // When the measurement is reimplemented, these two patterns and the text it
+    // emits have to move together, in one change.
     const leftover = /MARADT konfliktus-marker/.test(out)
     const clean = /TISZTÁN rebase-elhető/.test(out)
     setNotice(clean
