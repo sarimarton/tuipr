@@ -331,7 +331,7 @@ export async function main() {
   // The literal below is therefore STATICALLY VISIBLE, and the variable path
   // is taken only when the test handle is actually set. Both branches still
   // exist; only the default is now something a bundler can follow.
-  const appModuleOverride = process.env.TUIPR_NEXT_TUI_APP
+  const appModuleOverride = process.env.TUIPR_APP
 
   // Ink resolution follows the pattern of pkl.sh (scripts/pkl.sh): the
   // consumer's tree isn't guaranteed to have ink (pnpm hoisting, vendored
@@ -343,7 +343,7 @@ export async function main() {
   // resolved from it, we respawn ourselves with NODE_PATH set.
   const coreNodeModules = new URL('../node_modules/', import.meta.url)
   const coreNmPath = fileURLToPath(coreNodeModules)
-  if (!process.env.TUIPR_NEXT_TUI_NO_RESPAWN && existsSync(coreNmPath)) {
+  if (!process.env.TUIPR_NO_RESPAWN && existsSync(coreNmPath)) {
     let inkResolvable = true
     try {
       createRequire(import.meta.url).resolve('ink')
@@ -356,7 +356,7 @@ export async function main() {
       const nodePath = process.env.NODE_PATH ? `${coreNmPath}:${process.env.NODE_PATH}` : coreNmPath
       const res = spawnSync(process.execPath, [fileURLToPath(import.meta.url), ...process.argv.slice(2)], {
         stdio: 'inherit',
-        env: { ...process.env, NODE_PATH: nodePath, TUIPR_NEXT_TUI_NO_RESPAWN: '1' },
+        env: { ...process.env, NODE_PATH: nodePath, TUIPR_NO_RESPAWN: '1' },
       })
       process.exit(res.status ?? EXIT_TUI_UNAVAILABLE)
     }
@@ -407,10 +407,10 @@ if (isMain) await main()
  * window where the shell is visible.
  *
  * Usage:
- *   TUIPR_NEXT_TRACE=/tmp/tuipr-trace.log pnpm exec tuipr queue
+ *   TUIPR_TRACE=/tmp/tuipr-trace.log pnpm exec tuipr queue
  */
 function installEscapeTrace() {
-  const target = process.env.TUIPR_NEXT_TRACE
+  const target = process.env.TUIPR_TRACE
   if (!target) return
   const { appendFileSync } = require_fs()
   const t0 = process.hrtime.bigint()

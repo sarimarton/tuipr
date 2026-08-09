@@ -23,7 +23,7 @@ import { displayWidth } from './layout.mjs'
 // ("⬆️ in queue"), and since every row of next is queue-tagged, the arrow sat
 // on every row — so it distinguished nothing. Queue membership therefore gets
 // a neutral filled circle (● U+25CF, 1 cell); the filled/empty contrast is
-// deliberate: filled = it's in the next queue, empty (○, RMARKS) = awaiting
+// deliberate: filled = it is in the queue, empty (○, RMARKS) = awaiting
 // approval.
 const MARKS = {
   queue: { label: '● in queue', color: 'green' },

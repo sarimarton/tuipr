@@ -651,7 +651,7 @@ export function frictionLines({ kind, hasTrace = false, stackOn = null } = {}) {
  *
  * WHY THIS IS NEEDED IN THE TUI (and why the bash default isn't enough):
  * `bin/tuipr.sh`'s `cmd_approve` without `--body` posts the text
- *   "Reviewed in next queue session <date> — next @ <sha>"
+ *   "Reviewed in a tuipr session <date>"
  * This CLAIMS a review happened. Without a review trace this is a LIE in the
  * PR's audit trail — and that's precisely the core of the user's 1st
  * principle: friction isn't a hard gate because the ATTESTATION must tell the
@@ -677,7 +677,7 @@ export function approveBody({ hasTrace = false, traceSources = [], date = null, 
     // WITHOUT A TRACE: the body records ONLY the gesture, not that a review
     // happened. The word "Reviewed" is DELIBERATELY absent — that difference
     // is itself the honest attestation.
-    return `Approve from a next queue session${suffix}.`
+    return `Approve from a tuipr session${suffix}.`
   }
   // WITH A TRACE: the body claims a review, AND names the PROVENANCE. The
   // AI path and the hunk path are DIFFERENT claims — conflating them would be
@@ -689,7 +689,7 @@ export function approveBody({ hasTrace = false, traceSources = [], date = null, 
       ? 'claude -p AI-review + hunk inline review'
       : 'claude -p AI-review'
     : 'hunk inline review'
-  return `Reviewed in a next queue session — ${how}${suffix}.`
+  return `Reviewed in a tuipr session — ${how}${suffix}.`
 }
 
 /**

@@ -3209,7 +3209,7 @@ export function App({
   //
   // WHY NOT BASH'S DEFAULT (this is the feature's most expensive assertion):
   // without `--body`, `cmd_approve` posts the text
-  //     "Reviewed in next queue session <date> — next @ <sha>"
+  //     "Reviewed in a tuipr session <date>"
   // This STATES that a review happened. Without a review trace, this is a LIE
   // in the PR's AUDIT TRAIL — and this is exactly the core of the user's
   // principle 1: friction is NOT a hard gate precisely because the
@@ -4739,7 +4739,7 @@ export function App({
   // (see there) — no separate clamp is needed.
   // (wf31/65) THE FLOATING PANEL — EXPERIMENTAL, BEHIND AN ENV FLAG.
   //
-  //     TUIPR_NEXT_FLOAT=1 pnpm exec tuipr queue
+  //     TUIPR_FLOAT=1 pnpm exec tuipr queue
   //
   // The user's request: the info panel should NOT push the rest of the list, but should float
   // ABOVE it — and from the left, not at the edge, but a bit further in.
@@ -4753,13 +4753,13 @@ export function App({
   // the right direction. From now on this is the default"). The switch's direction reversed: the OLD,
   // list-pushing behavior can be requested back:
   //
-  //     TUIPR_NEXT_NOFLOAT=1 pnpm exec tuipr queue
+  //     TUIPR_NOFLOAT=1 pnpm exec tuipr queue
   //
   // THE DECLARATION STANDS HERE, BEFORE `frame` — TDZ (measured, the user's crash:
   // "Cannot access 'PANEL_FLOAT' before initialization"): the computation of `frame`
   // already reads the flag, so the flag must be born FIRST. The same
   // error class also struck at `hasFooter` (wf31/49).
-  const PANEL_FLOAT = !/^(1|true|yes)$/i.test(String(process.env.TUIPR_NEXT_NOFLOAT ?? '').trim())
+  const PANEL_FLOAT = !/^(1|true|yes)$/i.test(String(process.env.TUIPR_NOFLOAT ?? '').trim())
   // (wf31/67) THE LEFT INDENT BEHIND THE PR-NUMBER COLUMN — the user's request: "the covered
   // rows' PR numbers should be visible". The start of the row has a MEASURED width: cursor (2) +
   // `#NNNNN ` (7) = 9 cells; from the 10th cell on, the number AND a hint of a gap
@@ -4804,12 +4804,12 @@ export function App({
   // (wf31/64) THE `SLOW` DIAGNOSTIC ENV REMOVED — the tuning phase concluded,
   // the mechanism approved ("OK, it's good now"). What remains is the DISABLE flag:
   //
-  //     TUIPR_NEXT_NOANIM=1 pnpm exec tuipr queue
+  //     TUIPR_NOANIM=1 pnpm exec tuipr queue
   //
   // — the fade turns off completely (immediate end state). This is a USER setting, not
   // diagnostics: someone who doesn't want animation (e.g. a screen reader, a slow SSH
   // connection, or a simple preference) gets the dimming in one step.
-  const FADE_NOANIM = /^(1|true|yes)$/i.test(String(process.env.TUIPR_NEXT_NOANIM ?? '').trim())
+  const FADE_NOANIM = /^(1|true|yes)$/i.test(String(process.env.TUIPR_NOANIM ?? '').trim())
   const FADE_STEPS = 3
   const FADE_MS = 20
   // THE STARTING COLOR: THE THEME'S TEXT COLOR — WITH A MEASURED VALUE, NOT A GUESS.
@@ -5737,7 +5737,7 @@ export async function runTui() {
   // (startup-freeze) THE KILL SWITCH is the diagnostic's A/B arm: if the freeze
   // reappears even with the color query disabled, suspicion shifts elsewhere. It's a
   // harmless escape hatch in production too (the fade continues with the built-in approximations).
-  const themeColors = process.env.TUIPR_NEXT_TUI_NO_COLOR_QUERY
+  const themeColors = process.env.TUIPR_NO_COLOR_QUERY
     ? null
     : await queryTerminalColors().catch(() => null)
   // (startup-freeze) ATTACHING the stdin forward ONLY NOW — this way during the query

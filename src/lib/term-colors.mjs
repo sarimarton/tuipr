@@ -116,7 +116,7 @@ const EXPECTED_KEYS = 2 + Object.keys(PALETTE_INDEX).length
  */
 export function queryTerminalColors({
   output = process.stdout,
-  timeoutMs = Number(process.env.TUIPR_NEXT_TUI_COLOR_TIMEOUT_MS) || 80,
+  timeoutMs = Number(process.env.TUIPR_COLOR_TIMEOUT_MS) || 80,
   // Injectable stream factory for tests; in production it opens /dev/tty.
   openInput = () => {
     const fd = fs.openSync('/dev/tty', 'r')

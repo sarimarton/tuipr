@@ -55,8 +55,8 @@ import process from 'node:process'
  * subscription limit, and there's nothing to cut in dollars there. The
  * ceiling is therefore OUR responsibility.
  */
-export const AI_REVIEW_TIMEOUT_MS = Number(process.env.TUIPR_NEXT_AI_REVIEW_TIMEOUT_MS) > 0
-  ? Number(process.env.TUIPR_NEXT_AI_REVIEW_TIMEOUT_MS)
+export const AI_REVIEW_TIMEOUT_MS = Number(process.env.TUIPR_AI_REVIEW_TIMEOUT_MS) > 0
+  ? Number(process.env.TUIPR_AI_REVIEW_TIMEOUT_MS)
   : 1_800_000
 
 /**
@@ -245,7 +245,7 @@ export function aiReviewOutcome(o) {
           `#${pr}: the AI review stopped on TIMEOUT (${formatElapsed(o.timeoutMs ?? AI_REVIEW_TIMEOUT_MS)} `
           + `ceiling; the measured typical is ${formatElapsed(AI_REVIEW_TYPICAL_MS)}, the longest measured 31:06). `
           + 'The findings already written remain. What to do: check them with `d`, and if the PR is '
-          + 'genuinely large, raise the ceiling (`TUIPR_NEXT_AI_REVIEW_TIMEOUT_MS`) or restart with `r`.',
+          + 'genuinely large, raise the ceiling (`TUIPR_AI_REVIEW_TIMEOUT_MS`) or restart with `r`.',
       }
     case 'failed': {
       // THE FIRST LINE OF STDERR: the status line is ONE LINE, and a

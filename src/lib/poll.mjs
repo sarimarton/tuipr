@@ -17,7 +17,7 @@ import process from 'node:process'
 // === POLL: background staleness check (ONLY SIGNALS, doesn't reload) =======
 //
 // THE PROBLEM: the list sitting on screen silently ages. While the user is
-// reviewing a PR, the next queue can shift (someone pushes, a PR lands, main
+// reviewing a PR, the queue can shift (someone pushes, a PR lands, main
 // moves forward) — and the decision (approve / merge) gets made on a stale
 // picture. The header's timestamp (task 1) says WHEN we loaded; this section
 // says whether something has CHANGED SINCE THEN.
