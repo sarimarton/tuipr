@@ -9,12 +9,32 @@
 // KÖZÖS ELV MINDEN HÍVÁSON: a spawn-HIBA (ENOENT) és a NEM-NULLA EXIT külön
 // diagnózist kap, és a hiba DOBÓDIK — egy néma üres lista a hívót arra vezetné,
 // hogy "nincs adat", holott a szerződés bukott el.
-import { NEXT_SH, spawnCollect, spawnFailure } from './proc.mjs'
+//
+// --- A PROVIDER-VÁLASZTÁS ---------------------------------------------------
+//
+// A queue-modell egy SZERZŐDÉS, nem egy implementáció: a fölötte lévő rétegek
+// megjelenítik, sosem számolják újra. Ezért itt CSAK az dől el, KI állítja elő.
+//
+// Az alapértelmezett a `providers/github.mjs` — csak `gh`-t és `git`-et
+// használ, tehát bármelyik repón fut. A `TUIPR_QUEUE_CMD` egy KÜLSŐ providert
+// köt be a helyére: bármilyen parancs, ami a szerződés szerinti JSON-t írja a
+// stdoutra. Így a gazdagabb, MÉRÉSEN alapuló modell (conflict-diagnózis,
+// tranzitív stackelés) a TUI módosítása nélkül visszatehető.
+import { spawnCollect, spawnFailure } from './proc.mjs'
+import { fetchQueue as ghFetchQueue, fetchQueueAsync as ghFetchQueueAsync } from './providers/github.mjs'
 import { spawnSync } from 'node:child_process'
 
-/** A queue --json EGYETLEN parse-olója — a szinkron és az aszinkron út közös magja. */
-function parseQueueResult(res) {
-  const spawnErr = spawnFailure(res, 'bash')
+/** A külső provider parancsa, szavakra bontva — vagy `null`, ha nincs beállítva. */
+function externalProvider() {
+  const raw = process.env.TUIPR_QUEUE_CMD?.trim()
+  if (!raw) return null
+  const parts = raw.split(/\s+/)
+  return { cmd: parts[0], args: parts.slice(1) }
+}
+
+/** A külső provider kimenetének EGYETLEN parse-olója (sync + async közös mag). */
+function parseQueueResult(res, tool) {
+  const spawnErr = spawnFailure(res, tool)
   if (spawnErr) throw new Error(`a queue nem kérdezhető le: ${spawnErr}`)
   if (res.status !== 0) {
     throw new Error(`queue --json hiba (exit ${res.status}): ${(res.stderr || res.stdout || '').trim() || '(nincs kimenet)'}`)
@@ -22,17 +42,21 @@ function parseQueueResult(res) {
   return JSON.parse(res.stdout)
 }
 
-/** `tuipr queue --json` → modell-tömb. */
+/** A queue-modell — a beállított provider szerint. */
 export function fetchQueue() {
-  return parseQueueResult(spawnSync('bash', [NEXT_SH, 'queue', '--json'], { encoding: 'utf8' }))
+  const ext = externalProvider()
+  if (!ext) return ghFetchQueue()
+  return parseQueueResult(spawnSync(ext.cmd, ext.args, { encoding: 'utf8' }), ext.cmd)
 }
 
 /**
- * A fetchQueue ASZINKRON párja — BÁJTRA ugyanaz a szerződés (parse, hibaszöveg),
+ * A fetchQueue ASZINKRON párja — BÁJTRA ugyanaz a szerződés (alak, hibaszöveg),
  * csak az event loop marad szabad. A hunk-zárás utáni háttér-reload útja (5/2).
  */
 export async function fetchQueueAsync() {
-  return parseQueueResult(await spawnCollect('bash', [NEXT_SH, 'queue', '--json']))
+  const ext = externalProvider()
+  if (!ext) return ghFetchQueueAsync()
+  return parseQueueResult(await spawnCollect(ext.cmd, ext.args), ext.cmd)
 }
 
 
