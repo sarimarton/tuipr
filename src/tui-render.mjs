@@ -1,55 +1,62 @@
-// A REVIEW-MUNKAÁLLOMÁS RENDER-RÉTEGE: a queue-sor és a HÁROM overlay-BODY.
+// THE REVIEW WORKSTATION'S RENDER LAYER: the queue row and the THREE overlay
+// BODIES.
 //
-// MIÉRT EZ A VÁGÁS (a (3) fázis első modulja), ÉS MIÉRT PONT ITT A HATÁR:
+// WHY THIS CUT (the first module of phase (3)), AND WHY EXACTLY THIS
+// BOUNDARY:
 //
-// Ez a fájl a TUI azon részét tartalmazza, ami PROPBÓL renderel és NULLA
-// App-állapotot zár be — MÉRVE: a blokk egyetlen modul-szintű hivatkozása a
-// saját `ERROR_BODY_MAX_LINES` konstansa volt, minden más a core tiszta
-// függvényeitől jött. Nincs `useState`, nincs `useRef`, nincs setter a
-// closure-jében, tehát az áthelyezés MECHANIKUS: a hook-sorrend (a React néma
-// hibaosztálya) érintetlen, mert itt nincs hook.
+// This file holds the part of the TUI that renders FROM PROPS and closes
+// over ZERO App state — MEASURED: the block's only module-level reference
+// was its own `ERROR_BODY_MAX_LINES` constant, everything else came from the
+// core's pure functions. No `useState`, no `useRef`, no setter in its
+// closure, so the move is MECHANICAL: hook order (React's silent error
+// class) is untouched, because there are no hooks here.
 //
-// A HÁROM BODY NEM Ink-fát ad, hanem SOR-LEÍRÓKAT (`{ text, color?, … }`) — a
-// magasság-vágás (`clipBodyLines`) a MEGJELENÍTENDŐ sorokat számolja, és egy
-// összeállított Ink-fából a tördelt sorszám nem olvasható ki. A leíró → Ink
-// konverzió EGY helyen (`renderLines`), a vágás UTÁN.
+// THE THREE BODIES don't return an Ink tree, but ROW DESCRIPTORS
+// (`{ text, color?, … }`) — the height clip (`clipBodyLines`) counts the
+// DISPLAYED rows, and you can't read the wrapped line count back out of an
+// already-assembled Ink tree. The descriptor → Ink conversion happens in ONE
+// place (`renderLines`), AFTER the clip.
 //
-// AMI SZÁNDÉKOSAN NEM KERÜLT IDE: a `useInput` kezelője és az akció-flow-k
-// (`doAiReview`/`openReview`/`doMerge`/…). Azok 50 körüli ÉLŐ bindingot zárnak be
-// (setterek, refek, származtatott értékek); egy modulba emelve mindegyik egy
-// 50 mezős context-objektum paraméterévé válna, ami már NEM mozgatás, hanem
-// ÚJRATERVEZÉS — és pont azt a felületet hozná létre, ahol egy kimaradt mező
-// némán `undefined`-ot ad. Lásd a jelentés indoklását.
+// WHAT DELIBERATELY DIDN'T MOVE HERE: the `useInput` handler and the action
+// flows (`doAiReview`/`openReview`/`doMerge`/…). Those close over ~50 LIVE
+// bindings (setters, refs, derived values); lifted into one module, each of
+// those would become a field on a 50-field context object, which is no
+// longer a move but a REDESIGN — and would create exactly the surface where
+// a missing field silently gives `undefined`. See the report's rationale.
 
 import { Box, Text as InkText } from 'ink'
 
-// (wf31/39) MINDEN `Text` NEM-TÖRDELŐ — EZ A WRAP-FLICKER VALÓDI JAVÍTÁSA.
+// (wf31/39) EVERY `Text` DOESN'T WRAP — THIS IS THE REAL FIX FOR THE
+// WRAP-FLICKER.
 //
-// A MÉRT GYÖKÉROK (az ink 7.1.1 forrásából): az Ink `resized` handlere NEM indít
-// React-rendert, hanem KÖZVETLENÜL rajzol:
+// THE MEASURED ROOT CAUSE (from ink 7.1.1's source): Ink's `resized` handler
+// does NOT trigger a React render, it draws DIRECTLY:
 //     calculateLayout(); dom.emitLayoutListeners(rootNode); onRender()
-// A `calculateLayout` a GYÖKÉR yoga-node-ra állítja az új terminál-szélességet, de
-// a `Text` gyerekek TARTALMA a KORÁBBI React-render eredménye — a mi
-// `clampCells`-ünk tehát a RÉGI, szélesebb mértékkel vágott. A Yoga a hosszabb
-// stringet a szűkebb gyökérben TÖRDELI, és ez a tördelés az, ami az Ink
-// törlés-számítását elcsúsztatja (a flicker).
+// `calculateLayout` sets the new terminal width on the ROOT yoga node, but
+// the `Text` children's CONTENT is still the result of the PREVIOUS React
+// render — so our `clampCells` clipped with the OLD, wider measure. Yoga
+// then WRAPS the longer string inside the narrower root, and this wrap is
+// what throws off Ink's erase calculation (the flicker).
 //
-// EZÉRT NEM SEGÍTETT A wf31/38-AS AZONNALI CAP: az a MI render-utunkon frissül, a
-// resize-frame-et viszont nem a mi kódunk építi — a React-render csak a debounce
-// után jön.
+// WHY THE IMMEDIATE CAP IN wf31/38 DIDN'T HELP: that updates on OUR render
+// path, but the resize frame isn't built by our code — the React render only
+// comes after the debounce.
 //
-// A `wrap: 'truncate'` A YOGA SZINTJÉN oldja meg: a `Text` SOSEM tördel, hanem
-// LEVÁG. Ez pontosan a hunk viselkedése, amit a user megfigyelt ("Hunk valahogy
-// megoldja hogy ne legyen wrap flicker, csak átmeneti cap") — szűkítéskor a
-// tartalom azonnal csonkolódik, és a helyes layout a következő renderben áll be.
+// `wrap: 'truncate'` SOLVES IT AT THE YOGA LEVEL: `Text` NEVER wraps, it
+// TRUNCATES instead. This is exactly the behavior the user observed in hunk
+// ("Hunk somehow manages to avoid wrap flicker, just a temporary cap") —
+// on narrowing, the content is truncated immediately, and the correct layout
+// settles on the next render.
 //
-// MIÉRT WRAPPER, ÉS NEM 13 HELYEN EGY PROP: egy kihagyott `Text` NÉMÁN visszahozná
-// a flickert (egyetlen tördelő sor elég hozzá), és a hiba csak élő resize-nál
-// derülne ki. Így strukturálisan lehetetlen elfelejteni.
+// WHY A WRAPPER, AND NOT A PROP IN 13 PLACES: a missed `Text` would SILENTLY
+// bring the flicker back (a single wrapping line is enough), and the bug
+// would only surface on a live resize. This way it's structurally impossible
+// to forget.
 //
-// A `wrap` FELÜLÍRHATÓ: a hívó explicit `wrap`-je nyer (a spread a default UTÁN
-// jön). Ma egyetlen hívó sem ad meg mást — de ha valaha kell egy tördelő blokk
-// (pl. egy hosszú hibaszöveg), az ne kívánja a wrapper átírását.
+// `wrap` CAN BE OVERRIDDEN: the caller's explicit `wrap` wins (the spread
+// comes AFTER the default). Today no caller passes anything else — but if a
+// wrapping block is ever needed (e.g. a long error text), it shouldn't
+// require rewriting the wrapper.
 export function Text(props) {
   return h(InkText, { wrap: 'truncate', ...props })
 }
@@ -77,65 +84,76 @@ import {
 
 
 /**
- * Egy queue-sor renderelése.
+ * Rendering a single queue row.
  *
- * A `tailLevel` a listLayout degradációs szintje: keskeny terminálon a
- * státusz-tail fokozatosan elmarad, hogy a sor NE tördelődjön. A tördelés nem
- * kozmetikai baj — az Ink a túlfutó sort új sorba tolja, amitől a mark-oszlop
- * soronként más cellába csúszik (élőben mérve: 15/17/19 a 60 oszlopos panelen),
- * és a lista olvashatatlanná válik. Ezt a user HÁROMSZOR bejelentette.
+ * `tailLevel` is listLayout's degradation level: on a narrow terminal the
+ * status tail gradually drops off, so the row does NOT wrap. Wrapping isn't
+ * a cosmetic issue — Ink pushes an overflowing row onto a new line, which
+ * shifts the mark column into a different cell on every row (measured live:
+ * 15/17/19 on a 60-column panel), making the list unreadable. The user
+ * reported this THREE times.
  */
 /**
- * A TOMPÍTOTT SZÖVEG SZÍNE — NYITOTT OVERLAY / LEZÁRT SOR ALATT.
+ * THE DIMMED TEXT COLOR — UNDER AN OPEN OVERLAY / A SETTLED ROW.
  *
- * (wf31/55) A user kérése: "dimmelt betűk lenyitott info panelnél legyen picit
- * jobban dimmelve".
+ * (wf31/55) The user's request: "dimmed letters under an open info panel
+ * should be a bit more dimmed".
  *
- * MIÉRT NEM ELÉG A `dimColor`: az az ANSI SGR 2, EGYETLEN fix fokozat — nincs
- * "erősebb dim". A tompított szegmensek ráadásul MÁR elvesztik a saját színüket
- * (`color: faded ? undefined : …`), tehát a terminál ALAPSZÍNÉT kapják halványítva:
- * világos terminál-témán ez alig különbözik az éles sortól.
+ * WHY `dimColor` ISN'T ENOUGH: that's ANSI SGR 2, a SINGLE fixed level —
+ * there's no "stronger dim". The dimmed segments also ALREADY lose their own
+ * color (`color: faded ? undefined : …`), so they get the terminal's BASE
+ * COLOR dimmed: on a light terminal theme this barely differs from an active
+ * row.
  *
- * A MEGOLDÁS EXPLICIT SZÍN A `dimColor` MELLÉ: a hex a terminál-témától
- * FÜGGETLENÜL rögzíti a fakó szintet, a `dim` pedig még egy fokozatot visz rajta.
- * A `#6b7280` szándékosan a kiemelés hátterének (`#3a4250`) családjából való —
- * ugyanaz a hűvös szürke-kék tengely, tehát a kép nem esik két színvilágra.
+ * THE FIX IS AN EXPLICIT COLOR NEXT TO `dimColor`: the hex fixes the faded
+ * level INDEPENDENTLY of the terminal theme, and `dim` adds one more step on
+ * top of it. `#6b7280` deliberately belongs to the family of the highlight
+ * background (`#3a4250`) — the same cool gray-blue axis, so the picture
+ * doesn't split into two color worlds.
  *
- * A HÁROM FOKOZAT, amiből ez a KÖZÉPSŐ (a user kérdésére: "van köztük lépcsőfok?"):
+ * THE THREE LEVELS, of which this is the MIDDLE one (in answer to the user's
+ * question "is there a step between them?"):
  *
- *   1. alapszín + `dim`        — az EREDETI. A terminál alapszövege halványítva;
- *                                világos témán alig különbözik az éles sortól.
- *   2. `FADED_COLOR`, dim NÉLKÜL  ← EZ VAN MOST. A hex rögzíti a szintet, a
- *                                terminál-témától függetlenül.
- *   3. `FADED_COLOR` + `dim`   — a KETTŐ EGYMÁSON. Ez volt az első kísérlet, és a
- *                                user szerint túllőtt: a `dim` a hexet is ~50%-ra
- *                                viszi (≈ `#363940`), ami már majdnem olvashatatlan.
+ *   1. base color + `dim`        — the ORIGINAL. The terminal's base text
+ *                                dimmed; on a light theme barely differs
+ *                                from an active row.
+ *   2. `FADED_COLOR`, no dim     ← THIS IS WHAT WE HAVE NOW. The hex fixes
+ *                                the level, independent of the terminal
+ *                                theme.
+ *   3. `FADED_COLOR` + `dim`   — the TWO STACKED. This was the first
+ *                                attempt, and per the user it overshot:
+ *                                `dim` takes the hex down to ~50% too
+ *                                (≈ `#363940`), which is nearly unreadable.
  *
- * A HANGOLÁS EGY SZÁMON MÚLIK: sötétebb kell → `#5a6270`; világosabb → `#7d8694`
- * vagy `#8a93a3`. A `dim` VISSZAKAPCSOLÁSA NEM finomhangolás, hanem egy egész
- * fokozat ugrás — azért esik ki a fakó szegmenseknél.
+ * THE TUNING COMES DOWN TO ONE NUMBER: darker needed → `#5a6270`; lighter →
+ * `#7d8694` or `#8a93a3`. TURNING `dim` BACK ON IS NOT fine-tuning, it's a
+ * whole level jump — that's why it's excluded on faded segments.
  *
- * MIÉRT NEM SÖTÉTEBB: a tompított sor OLVASHATÓ kontextus marad (a user a panel
- * mellett is látja, melyik PR-ok állnak a sorban) — nem eltüntetni akarjuk, csak
- * hátrébb tolni. A user szava is "picit".
+ * WHY NOT DARKER: a dimmed row stays as READABLE context (the user still
+ * sees, next to the panel, which PRs are in the queue) — we're not trying to
+ * hide it, just push it back. The user's own word was "a bit".
  */
 export const FADED_COLOR = '#6b7280'
 
 /**
- * A NEVESÍTETT SZÍNEK HEX-KÖZELÍTÉSE — KIZÁRÓLAG A TWEEN KEZDŐPONTJÁHOZ.
+ * THE HEX APPROXIMATION OF NAMED COLORS — ONLY FOR THE TWEEN'S STARTING
+ * POINT.
  *
- * (wf31/61) A user lelete: "a jobb részen lévő zöld, sárga, cián, piros fehérre
- * villan" — mert a tompított szegmens ELVESZTETTE a saját színét, és a (fehérről
- * induló) fade-színt kapta. A javítás: minden szegmens a SAJÁT színéből tweenel a
- * dim felé — ehhez viszont a nevesített Ink-színek hex-értéke kell.
+ * (wf31/61) The user's finding: "the green, yellow, cyan, red on the right
+ * side flash white" — because the dimmed segment LOST its own color, and got
+ * the fade color (starting from white) instead. The fix: every segment
+ * tweens from ITS OWN color toward dim — which requires the hex value of the
+ * named Ink colors.
  *
- * KÖZELÍTÉS, ÉS EZ ITT ELÉG: a terminál valódi palettáját nem lehet kikérdezni
- * (ugyanaz a korlát, mint az alapszínnél — OSC query a stdin-be). A tévedés ára
- * kicsi és lokális: az adott szegmens ELSŐ fade-frame-je ugrik egy hajszálnyit,
- * a VÉGPONT (FADED_COLOR) exakt, a NYUGALMI szín pedig érintetlen (azt továbbra
- * is a téma adja — a map CSAK faded állapotban olvasódik).
+ * AN APPROXIMATION, AND THAT'S GOOD ENOUGH HERE: the terminal's real palette
+ * can't be queried (the same limit as with the base color — an OSC query
+ * into stdin). The cost of being wrong is small and local: only the given
+ * segment's FIRST fade frame jitters by a hair, the END POINT (FADED_COLOR)
+ * is exact, and the RESTING color is untouched (that still comes from the
+ * theme — the map is only read in the faded state).
  *
- * Az értékek tipikus sötét-témás palettákhoz igazodnak (a user környezete is az).
+ * The values are tuned to typical dark themes (the user's environment is one
+ * too).
  */
 const NAMED_COLOR_HEX = {
   red: '#ef4444',
@@ -151,13 +169,15 @@ const NAMED_COLOR_HEX = {
 }
 
 /**
- * A tween kezdőpontja egy szegmens-színhez: hex marad, nevesített felold,
- * ismeretlen a téma előtérszíne (vagy fehér).
+ * The tween's starting point for a segment color: a hex stays as is, a named
+ * color gets resolved, an unknown one falls back to the theme's foreground
+ * (or white).
  *
- * (wf31/62) A `palette` a RUNTIME MÉRT terminál-paletta (OSC 4/10, lásd a
- * `term-colors.mjs` fejét) — ha van, az ÜT: a user lelete szerint az "in queue"
- * zöldje nem egyezett a beépített közelítéssel ("árnyaltabb, zöldes-sárgás").
- * A `NAMED_COLOR_HEX` a fallback marad, nem válaszoló terminálokra.
+ * (wf31/62) `palette` is the RUNTIME MEASURED terminal palette (OSC 4/10,
+ * see the head of `term-colors.mjs`) — if present, it WINS: per the user's
+ * finding, the "in queue" green didn't match the built-in approximation
+ * ("more nuanced, greenish-yellow"). `NAMED_COLOR_HEX` stays the fallback,
+ * for terminals that don't respond.
  */
 function fadeStartOf(color, palette) {
   if (typeof color === 'string' && color.startsWith('#')) return color
@@ -166,164 +186,180 @@ function fadeStartOf(color, palette) {
 
 export function Row({
   row, selected, titleWidth, tailLevel, dimmed = false, columns = 0, terminalColumns = 0,
-  // (wf31/61) A TOMPULÁS ELŐREHALADÁSA (0..1) A HÍVÓTÓL JÖN — nem kész szín,
-  // hanem a `t`, mert a tween szegmensenként MÁS kezdőpontból fut (a zöld a
-  // zöldből, a fehér a fehérből — a user lelete a fehérre villanó színekről).
-  // A default 1 (végállapot): aki nem tud a fade-ről, a kész, jóváhagyott
-  // tompítást kapja — bájtra a wf31/55-ös kép.
+  // (wf31/61) THE FADE PROGRESS (0..1) COMES FROM THE CALLER — not a
+  // finished color, but `t`, because the tween runs from a DIFFERENT
+  // starting point per segment (the green tweens from green, the white from
+  // white — the user's finding about colors flashing white). The default is
+  // 1 (end state): whoever doesn't know about the fade gets the finished,
+  // settled dim — byte-for-byte the wf31/55 picture.
   fadeT = 1,
-  // (wf31/62) A RUNTIME MÉRT terminál-paletta (vagy null) — a tween kezdőpontjai
-  // ebből jönnek, hogy a színek a TÉMA színéből induljanak, ne közelítésből.
+  // (wf31/62) The RUNTIME MEASURED terminal palette (or null) — the tween's
+  // starting points come from this, so the colors start from the THEME's
+  // color, not from an approximation.
   fadePalette = null,
 }) {
   const cursor = selected ? '❯ ' : '  '
-  // A BEHÚZÁS LÉPCSŐZŐS: 2*indentDepth cella (a modellből jött TRANZITÍV
-  // mélység). Korábban binárisan 2 volt minden stacked sorra, tehát egy A→B→C
-  // láncban a C ugyanott állt, mint a B — a hierarchia eltűnt a képről.
+  // THE INDENT IS STEPPED: 2*indentDepth cells (the TRANSITIVE depth from
+  // the model). Previously it was binary, 2 for every stacked row, so in an
+  // A→B→C chain C landed in the same place as B — the hierarchy disappeared
+  // from the picture.
   //
-  // A `?? (indent ? 1 : 0)` fallback a régi sor-alakot tartja életben (a
-  // listLayout ugyanezt a fallbacket használja — a kettőnek egyeznie KELL,
-  // különben a mark-oszlop elcsúszik).
+  // The `?? (indent ? 1 : 0)` fallback keeps the old row shape alive (the
+  // listLayout uses the same fallback — the two MUST match, otherwise the
+  // mark column drifts).
   const depth = typeof row.indentDepth === 'number' ? row.indentDepth : row.indent ? 1 : 0
-  // (1b) A BEHÚZÁS-PREFIX a core KÖZÖS függvényétől jön (`stackIndent`), nem itt
-  // épül: a title-büdzsé (`listLayout`) UGYANEZT a mértéket használja, és két
-  // számítás ugyanarra a fogalomra garantáltan elcsúszik — ez a projekt MÉRT
-  // hibaosztálya (a `floor` binárisan 3 volt, míg a renderelő 2*depth-et
-  // számolt, és 56/57 oszlopon némán túllógott a sor).
+  // (1b) The INDENT PREFIX comes from the core's SHARED function
+  // (`stackIndent`), it isn't built here: the title budget (`listLayout`)
+  // uses the SAME measure, and two calculations on the same concept are
+  // guaranteed to drift — this is the project's MEASURED error class (the
+  // `floor` was hardcoded to 3 while the renderer computed 2*depth, and the
+  // row silently overran at 56/57 columns).
   //
-  // A LÉPCSŐS JELÖLÉS a user szó szerinti kérése (`#911` / `╰─#933`), és a
-  // SZÉLESSÉG VÁLTOZATLAN: a `╰─` CELLÁBAN 2 (MÉRVE), tehát a behúzás utolsó két
-  // celláját foglalja el, nem ad hozzá. Ezért a mark-oszlop nem csúszik el.
+  // The STEPPED marker is the user's literal request (`#911` / `╰─#933`),
+  // and the WIDTH IS UNCHANGED: the `╰─` is 2 CELLS (MEASURED), so it
+  // occupies the last two cells of the indent, it doesn't add to it. That's
+  // why the mark column doesn't drift.
   const indentPrefix = stackIndent(depth)
   const indentCells = displayWidth(indentPrefix)
-  // A cím a büdzséhez csonkolódik/paddolódik; a behúzott sor a behúzására adott
-  // cellákkal rövidebb címoszlopot kap — így a mark-oszlop MINDEN szinten
-  // ugyanabban a cellában kezdődik (ugyanaz a szabály, mint a lista-nézetben).
+  // The title is truncated/padded to the budget; an indented row gets a
+  // title column shortened by the cells its indent used — so the mark
+  // column starts in the SAME cell at EVERY level (the same rule as in the
+  // list view).
   const tw = Math.max(1, titleWidth - indentCells)
   const showRmark = tailLevel < 2 && row.rmark
   const showFlags = tailLevel < 1
-  // OVERLAY NYITVA: a lista TOMPÍTVA marad renderelve. Ez a refaktor lényege — a
-  // korábbi teljes-képernyős csere elvette a kontextust (a user nem látta, melyik
-  // PR-ról szól a dialog). A tompítás egyszerre mondja, hogy a lista MÉG OTT VAN,
-  // és hogy a fókusz NEM rajta van: a színek eldobása és a dimColor együtt.
+  // OVERLAY OPEN: the list stays rendered, DIMMED. This is the point of the
+  // refactor — the earlier full-screen swap took away context (the user
+  // couldn't see which PR the dialog was about). The dimming says at once
+  // that the list is STILL THERE, and that the focus is NOT on it: dropping
+  // the colors and dimColor together.
   //
-  // A KIVÁLASZTOTT SOR VISZONT KIVÉTEL (user-kérés, szó szerint): "amikor lenyitok
-  // egy elemet, annak a sora a főlistán maradhatna eredeti színezésben dimmed
-  // helyett, hiszen az egy highlighted sor".
+  // THE SELECTED ROW IS THE EXCEPTION THOUGH (user request, verbatim): "when
+  // I open an item, that row on the main list could stay in its original
+  // coloring instead of dimmed, since that's a highlighted row".
   //
-  // MIÉRT JOGOS A KIVÉTEL: a tompítás ÜZENETE az, hogy "ez nem a fókusz". A
-  // kurzor sora viszont PONT a fókusz tárgya — a panel ARRÓL a PR-ról szól, és a
-  // pozíciója (a panel közvetlenül alatta nyílik) is ezt mondja. Az EGÉSZ lista
-  // tompítva a kurzor sorát is „mellékessé" degradálta, tehát a kép elvesztette
-  // azt a horgonyt, amihez a panel tartozik.
+  // WHY THE EXCEPTION IS JUSTIFIED: the dimming's MESSAGE is "this isn't the
+  // focus". The cursor's row, though, IS EXACTLY the subject of the focus —
+  // the panel is ABOUT that PR, and its position (the panel opens directly
+  // below it) says the same. Dimming the WHOLE list also degraded the
+  // cursor's row to "incidental", so the picture lost the anchor the panel
+  // belongs to.
   //
-  // A TOMPÍTÁS NEM SZŰNIK MEG, csak a hatóköre szűkül a NEM-kiválasztott sorokra:
-  // a kontraszt (egy éles sor sok tompa között) ERŐSEBB kontextus-jelzés, mint a
-  // homogén tompaság volt.
-  // (wf31/25) A LEZÁRT (mergelt) SOR IS TOMPÍTOTT — a MI akciónk optimista
-  // eredménye (lásd a `rows.mjs` MARKS `merged` ágát). A user kérése: "legyen
-  // merged az állapota és dimmeld le".
+  // THE DIMMING DOESN'T DISAPPEAR, only its scope narrows to the
+  // NON-selected rows: the contrast (one sharp row among many dim ones) is a
+  // STRONGER context signal than uniform dimness was.
+  // (wf31/25) A SETTLED (merged) ROW IS ALSO DIMMED — the RESULT of OUR OWN
+  // optimistic action (see the `merged` branch of MARKS in `rows.mjs`). The
+  // user's request: "let it show as merged and dim it".
   //
-  // A KETTŐ KÜLÖNBÖZŐ FOGALOM, ezért két külön forrás:
-  //   · `dimmed` — az OVERLAY nyitva van, tehát a lista nem a fókusz (a kurzor
-  //     sora KIVÉTEL, mert a panel épp arról szól);
-  //   · `settled` — a sor SORSA lezárult (lemergeltük). Ez a sorról szól, nem a
-  //     fókuszról, tehát a kurzoron IS érvényes: egy kiválasztott, mergelt sor is
-  //     halkan látszik — a kiemelése azt sugallná, hogy még van vele teendő.
+  // THE TWO ARE DIFFERENT CONCEPTS, hence two separate sources:
+  //   · `dimmed` — the OVERLAY is open, so the list isn't the focus (the
+  //     cursor's row is the EXCEPTION, because the panel is about it);
+  //   · `settled` — the row's FATE is decided (we merged it). This is about
+  //     the row, not the focus, so it applies to the cursor too: a selected,
+  //     merged row is also shown quietly — highlighting it would suggest
+  //     there's still something to do with it.
   const faded = (dimmed && !selected) || row.settled === true
   const dim = faded || undefined
-  // A SOR SAJÁT TWEEN-ÁLLÁSA. A `settled` (mergelt) sor a VÉGÁLLAPOTRA pinnelt:
-  // az MÁR tompa volt a panel nyitása ELŐTT is — ha a globális `fadeT`-t kapná, a
-  // panel nyitásakor Ő IS felvillanna a kezdőszínére, holott vele nem történt
-  // semmi. (Ez a hibaosztály a wf31/56-ban is ott volt, csak settled sor híján
-  // nem látszott.)
+  // THE ROW'S OWN TWEEN POSITION. A `settled` (merged) row is PINNED to the
+  // END STATE: it was already dim BEFORE the panel opened — if it got the
+  // global `fadeT`, IT would also flash up to its starting color when the
+  // panel opens, even though nothing happened to it. (This error class was
+  // already present in wf31/56, it just wasn't visible without a settled
+  // row.)
   const rowT = row.settled === true ? 1 : fadeT
-  // A TOMPÍTOTT SZEGMENS A SAJÁT SZÍNÉBŐL TWEENEL a dim felé (wf31/61) — a zöld
-  // a zöldből, a színtelen a fehérből. A `dim` attribútum tompításkor kiesik: a
-  // színes tween már maga a tompítás, a dim rajta egy fokozattal túllőne.
+  // THE DIMMED SEGMENT TWEENS FROM ITS OWN COLOR toward dim (wf31/61) — green
+  // from green, colorless from white. The `dim` attribute drops out while
+  // fading: the colored tween is itself already the dimming, `dim` on top of
+  // it would overshoot by one level.
   const fadePaint = (seg) => lerpHex(fadeStartOf(seg.color, fadePalette), FADED_COLOR, rowT)
-  // A CÍM CELLÁBAN csonkolódik/paddolódik. A `.slice` UTF-16 code unitot vág:
-  // emojis címnél cellában TÚLLÓGOTT (a mark-oszlop soronként elcsúszott), és a
-  // padEnd is a rossz mértéket pótolta. A clampCells + cella-alapú pad ugyanazt a
-  // mértéket használja, amit a listLayout a büdzsé kiszámolásához.
+  // THE TITLE IS TRUNCATED/PADDED IN CELLS. `.slice` cuts UTF-16 code units:
+  // emoji in the title OVERRAN in cells (the mark column drifted row by
+  // row), and padEnd padded by the wrong measure too. clampCells + a
+  // cell-based pad use the same measure the listLayout uses for the budget
+  // calculation.
   const clipped = clampCells(row.title, tw)
   const title = clipped + ' '.repeat(Math.max(0, tw - displayWidth(clipped)))
-  // (wf31/26) A KIVÁLASZTOTT SOR HÁTTÉRSZÍNT KAP — a user lelete: "a highlight
-  // karakter: »❯ « ezzel nem lehet követni a selected sort rendesen, túl széles a
-  // monitor."
+  // (wf31/26) THE SELECTED ROW GETS A BACKGROUND COLOR — the user's finding:
+  // "the highlight character »❯ « can't be used to track the selected row
+  // properly, the monitor is too wide."
   //
-  // MIÉRT A HÁTTÉR, ÉS NEM EGY MÁSODIK NYÍL A JOBB SZÉLEN (a user rám bízta): a
-  // nyíl-pár csak a sor KÉT VÉGÉT jelöli meg — a 190 cellás monitoron pont a
-  // KÖZÉP marad jelöletlen, ahol a cím és a markok vannak, tehát a szem továbbra
-  // is „ugrálna" a két horgony között. A háttér VÉGIGVISZI a jelölést: bárhol
-  // nézsz a sorra, látszik, hogy az a kiválasztott.
+  // WHY THE BACKGROUND, AND NOT A SECOND ARROW ON THE RIGHT EDGE (the user
+  // left it to me): an arrow pair only marks the TWO ENDS of the row — on a
+  // 190-cell monitor exactly the MIDDLE stays unmarked, where the title and
+  // the marks are, so the eye would keep "jumping" between the two anchors.
+  // The background CARRIES the marking all the way through: wherever you
+  // look at the row, it shows that it's the selected one.
   //
-  // A SZÍN `#3a4250` — SÖTÉT, KÉK FELÉ HÚZÓ SZÜRKE.
+  // THE COLOR IS `#3a4250` — A DARK, BLUE-LEANING GRAY.
   //
-  // A user KÉT pontosítása vezetett ide:
-  //   1) "feltételezhetjük, hogy sötét a háttér […] a betűk világosak. Tehát egy
-  //      világos háttéren nem látszanak a betűk. Minimál kontraszt" — ezért nem
-  //      `blue`/`white`, hanem sötét, alacsony kontrasztú háttér;
-  //   2) "egy fokkal világosabb legyen, és menjen szürke felé, mert a mostani
-  //      valami barna fos színű" — a `#2a2a2a` túl sötét volt (alig látszott), és
-  //      a legtöbb terminál-renderelőn melegebbnek tűnt a szándékoltnál.
+  // The user's TWO refinements led here:
+  //   1) "let's assume the background is dark […] the letters are light. So
+  //      on a light background the letters won't show. Minimal contrast" —
+  //      hence not `blue`/`white`, but a dark, low-contrast background;
+  //   2) "make it one shade lighter, and go toward gray, because the current
+  //      one is some ugly brownish color" — `#2a2a2a` was too dark (barely
+  //      visible), and looked warmer than intended on most terminal
+  //      renderers.
   //
-  // A HARMADIK ITERÁCIÓ (a user: "menjen a kék felé mert még mindig barnás, és
-  // még egy picit világosabb lehet"): `#3a4250` — a KÉK csatorna a legerősebb
-  // (0x50 > 0x42 > 0x3a), tehát a hue definíció szerint a kék-szürke tartományban
-  // van, meleg (barnás) irányba NEM tud elmenni. A világosság is emelkedett: a
-  // luma ~0x42 a korábbi 0x3a-ról.
+  // THE THIRD ITERATION (the user: "go toward blue because it's still
+  // brownish, and it can be a bit lighter still"): `#3a4250` — the BLUE
+  // channel is the strongest (0x50 > 0x42 > 0x3a), so by hue definition it
+  // sits in the blue-gray range, it CAN'T drift toward warm (brownish).
+  // Lightness rose too: luma is ~0x42, up from the earlier 0x3a.
   //
-  // MIÉRT KELLETT HÁROM KÖR: a `#2a2a2a`/`#3a3a3a` SEMLEGES szürke volt
-  // (R=G=B), de a terminálok gamma-kezelése és a betűk anti-aliasingja mellett
-  // melegebbnek látszott a számított értéknél. Egy EXPLICIT kék eltolás ezt a
-  // renderelési torzítást is elnyeli.
+  // WHY IT TOOK THREE ROUNDS: `#2a2a2a`/`#3a3a3a` was a NEUTRAL gray
+  // (R=G=B), but with terminal gamma handling and font anti-aliasing it
+  // looked warmer than the computed value. An EXPLICIT blue shift absorbs
+  // this rendering distortion too.
   //
-  // MIÉRT NEM A NÉVVEL MEGADOTT ANSI-SZÍNEK: a `blue`/`cyan`/`white` a terminál
-  // 16-színes palettájának tagjai, amiket a témák VILÁGOSRA is állíthatnak — a
-  // `blue` a legtöbb sötét témában épp elég világos ahhoz, hogy a világos
-  // betűszínek beleolvadjanak (ez volt a lelet). A hex-érték viszont a TRUE COLOR
-  // csatornán megy, tehát a téma nem írja át: a `#2a2a2a` a tipikus sötét
-  // terminál-háttérnél (`#1e1e1e`…`#000`) EGY FOKKAL világosabb, ami elég a sor
-  // kijelöléséhez, de a világos előtér-színeket (a mark zöld/sárga/piros, az
-  // author magenta) érintetlenül hagyja.
+  // WHY NOT THE NAMED ANSI COLORS: `blue`/`cyan`/`white` are members of the
+  // terminal's 16-color palette, which themes can set to LIGHT too — `blue`
+  // is light enough in most dark themes that the light foreground colors
+  // blend into it (this was the finding). The hex value, on the other hand,
+  // runs on the TRUE COLOR channel, so the theme doesn't rewrite it: `#2a2a2a`
+  // on a typical dark terminal background (`#1e1e1e`…`#000`) is ONE SHADE
+  // lighter, enough to mark the row, while leaving the light foreground
+  // colors (the green/yellow/red mark, the magenta author) untouched.
   //
-  // FALLBACK: 256-színes vagy 16-színes terminálon a chalk a legközelebbi
-  // paletta-taghoz kvantál — az a sötét szürke/fekete, tehát a viselkedés ott is
-  // "alig világosabb háttér", nem elmosott szöveg.
+  // FALLBACK: on a 256-color or 16-color terminal, chalk quantizes to the
+  // nearest palette member — that's a dark gray/black, so the behavior there
+  // is also "slightly lighter background", not washed-out text.
   //
-  // MINDEN SZEGMENSRE KELL: az Ink a `backgroundColor`-t Text-enként alkalmazza,
-  // tehát egy kihagyott szegmens LYUKAT hagyna a kiemelésben. Ezért egy közös
-  // `bg` objektum spreadelődik mindenhová — így egy jövőbeli új szegmens
-  // hozzáadásakor a hiba SZEMBESZÖKŐ (a lyuk látszik), nem néma.
+  // NEEDED ON EVERY SEGMENT: Ink applies `backgroundColor` per Text, so a
+  // skipped segment would leave a HOLE in the highlight. That's why a shared
+  // `bg` object is spread everywhere — so adding a new segment later makes
+  // the mistake OBVIOUS (the hole shows), not silent.
   //
-  // A LEZÁRT (mergelt) SOR NEM KAP HÁTTERET akkor sem, ha kiválasztott: ott a
-  // `faded` a szándék (a sorsa lezárult), és egy kiemelt-de-halk sor önmagával
-  // vitatkozna.
+  // A SETTLED (merged) ROW GETS NO BACKGROUND even when selected: there the
+  // intent is `faded` (its fate is decided), and a highlighted-yet-quiet row
+  // would contradict itself.
   const bg = selected && !faded ? { backgroundColor: '#3a4250' } : {}
-  // (wf31/29) A SOR SZEGMENSEI ELŐBB LISTÁBA, AZTÁN CELLÁRA VÁGVA — EZ A
-  // RESIZE-GLITCH VALÓDI JAVÍTÁSA.
+  // (wf31/29) THE ROW'S SEGMENTS BUILT INTO A LIST FIRST, THEN CLIPPED TO
+  // CELLS — THIS IS THE REAL FIX FOR THE RESIZE GLITCH.
   //
-  // A MÉRT MECHANIZMUS (a user paste-elt képéből: a fejléc többször íródik ki
-  // ugyanabba a sorba, a sorok egymásba folynak): az Ink `log-update`-je a
-  // KORÁBBI frame SORSZÁMÁT törli (`eraseLines(previousLineCount)`), és ezt a
-  // szám[ot] a SAJÁT layoutjából ismeri. Ha viszont egy kiírt sor SZÉLESEBB a
-  // terminálnál, a terminál TÖRDELI — a képernyőn TÖBB fizikai sor lesz, mint
-  // amennyit az Ink számol. A törlés így ALULMARAD, és a maradék ott ragad. Az
-  // Ink `resized` handlere csak SZŰKÍTÉSNÉL töröl teljes képernyőt
-  // (`currentWidth < lastTerminalWidth`), szélesítésnél NEM — ezért esett szét
-  // mindkét irányban.
+  // THE MEASURED MECHANISM (from the user's pasted screenshot: the header
+  // gets written repeatedly into the same row, rows run into each other):
+  // Ink's `log-update` erases the PREVIOUS frame's LINE COUNT
+  // (`eraseLines(previousLineCount)`), and it knows this count from its OWN
+  // layout. But if a written row is WIDER than the terminal, the terminal
+  // WRAPS it — the screen ends up with MORE physical lines than Ink counted.
+  // The erase then UNDERSHOOTS, and the remainder stays stuck. Ink's
+  // `resized` handler only clears the full screen on NARROWING
+  // (`currentWidth < lastTerminalWidth`), not on widening — which is why it
+  // fell apart in both directions.
   //
-  // MIÉRT NEM VOLT ELÉG A `layout.width` (wf31/27-28): az a TARTALOMBÓL számolt
-  // tábla-szélesség, ami a terminálnál SZŰKEBB szokott lenni — de a resize
-  // KÖZBEN a React-state és a valódi terminál-méret ELTÉR (az Ink
-  // `useWindowSize`-a egy tickkel késik). Abban a résben a sor a MÉG RÉGI,
-  // szélesebb mértékkel épül, miközben a terminál MÁR szűkebb.
+  // WHY `layout.width` (wf31/27-28) WASN'T ENOUGH: that's the table width
+  // computed FROM THE CONTENT, which tends to be NARROWER than the terminal
+  // — but DURING a resize the React state and the real terminal size DIFFER
+  // (Ink's `useWindowSize` lags by one tick). In that gap the row is built
+  // with the STILL OLD, wider measure, while the terminal is ALREADY
+  // narrower.
   //
-  // A FAIL-SAFE TEHÁT A RENDERELŐBEN KELL, nem a layoutban: bármit is ad a
-  // layout, a KIÍRT sor SOSEM lehet szélesebb a terminálnál. A vágás CELLÁBAN
-  // megy (`clampCells`), tehát az emojis markokat (⚠️/⛔/⬆️, 2 cella) sem hasítja
-  // félbe.
+  // SO THE FAIL-SAFE BELONGS IN THE RENDERER, not the layout: whatever the
+  // layout gives, the WRITTEN row must NEVER be wider than the terminal. The
+  // clip runs IN CELLS (`clampCells`), so it won't cut an emoji mark
+  // (⚠️/⛔/⬆️, 2 cells) in half either.
   const segs = [
     { text: cursor, color: selected ? 'cyan' : undefined },
     { text: indentPrefix, dimOverride: dim || !row.selectable },
@@ -331,17 +367,19 @@ export function Row({
     { text: `${String(row.author).slice(0, 5).padEnd(5)} `, color: 'magenta' },
     { text: `${title} ` },
     { text: row.mark.label, color: row.mark.color },
-    // (wf31/52) A CONFLICT-TENGELY JELZŐI A MARK MELLÉ, AZ RMARK ELŐTT.
+    // (wf31/52) THE CONFLICT-AXIS INDICATORS NEXT TO THE MARK, BEFORE THE
+    // RMARK.
     //
-    // A user lelete: `⚠️ conflict · ○ approve vár (forrás?)` — "ahol a »forrás?« a
-    // conflictra vonatkozik". A régi sorrend (mark → rmark → MINDEN flag) az
-    // approve-oszlop mögé vitte azt, ami a markról beszél, és a szem oda is
-    // olvasta: mintha a jóváhagyás várna a forrásra.
+    // The user's finding: `⚠️ conflict · ○ approve waiting (source?)` —
+    // "where »source?« refers to the conflict". The old order (mark → rmark
+    // → ALL flags) carried what talks about the mark past the approve
+    // column, and the eye read it that way too: as if the approval were
+    // waiting on the source.
     //
-    // A CSOPORTOSÍTÁS ADATBÓL JÖN (`axis: 'mark'`, lásd a `flagsFor` fejét), nem a
-    // renderelő találgatásából — így a lista és a bash-nézet ugyanarról a tényről
-    // ugyanazt a csoportosítást mondja, és egy új jelző hozzáadásakor a HELYE is a
-    // definíciójában dől el, nem itt.
+    // THE GROUPING COMES FROM DATA (`axis: 'mark'`, see the head of
+    // `flagsFor`), not from the renderer's guesswork — so the list and the
+    // bash view state the same grouping for the same fact, and a new
+    // indicator's PLACE is decided in its own definition, not here.
     ...(showFlags
       ? row.flags
           .filter((f) => f.axis === 'mark')
@@ -353,24 +391,27 @@ export function Row({
           { text: row.rmark.label, color: row.rmark.color },
         ]
       : []),
-    // A TÖBBI JELZŐ (stack-tengely, meta: review-nyom, cache-státusz, spinner) a
-    // sor VÉGÉN marad: a tail-degradáció ezeket dobja el először, és ez szándékos —
-    // a metaadat nem tolhatja jobbra azt, amiért a user a sort olvassa.
+    // THE REST OF THE INDICATORS (stack axis, meta: review trace, cache
+    // status, spinner) stay at the row's END: the tail degradation drops
+    // these first, and that's deliberate — metadata shouldn't push right the
+    // thing the user reads the row for.
     ...(showFlags
       ? row.flags
           .filter((f) => f.axis !== 'mark')
           .map((f) => ({ text: ` ${f.label}`, color: f.color }))
       : []),
   ]
-  // A KIEMELÉS HÁTTERE a sor VÉGÉIG (a `columns` a TÁBLA szélessége — lásd a
-  // hívási helyet). Csak a kiválasztott soron, és csak ha van maradék hely.
+  // THE HIGHLIGHT BACKGROUND GOES TO THE END OF THE ROW (`columns` is the
+  // TABLE's width — see the call site). Only on the selected row, and only
+  // if there's room left.
   const used = segs.reduce((n, seg) => n + displayWidth(seg.text), 0)
   if (Object.keys(bg).length > 0 && columns > used) {
     segs.push({ text: ' '.repeat(columns - used) })
   }
-  // A KEMÉNY PLAFON: a terminál TÉNYLEGES szélessége. A `columns` a táblát írja
-  // le (ami szűkebb lehet), a `terminalColumns` a fizikai korlátot — a kettő
-  // közül a KISEBB nyer, és a `clampCells` szegmensenként fogyasztja a büdzsét.
+  // THE HARD CEILING: the terminal's ACTUAL width. `columns` describes the
+  // table (which can be narrower), `terminalColumns` is the physical limit —
+  // the SMALLER of the two wins, and `clampCells` consumes the budget
+  // segment by segment.
   const hardLimit = terminalColumns > 0 ? terminalColumns : Number.POSITIVE_INFINITY
   let left = hardLimit
   const out = []
@@ -382,20 +423,22 @@ export function Row({
     out.push(h(Text, {
       key: `s${i}`,
       ...bg,
-      // A FAKÓ SZÍN CSAK OTT, AHOL NINCS SAJÁT: a tompított szegmensek a hívónál
-      // már `undefined` színt kapnak (`faded ? undefined : …`), tehát ez a `??`
-      // pontosan azokra üt, amiket tompítani akarunk — az éles sorok szemantikus
-      // színeit (zöld approved, piros conflict) NEM írja felül.
+      // THE FADED COLOR ONLY WHERE THERE'S NO OWN ONE: the dimmed segments
+      // already get an `undefined` color from the caller
+      // (`faded ? undefined : …`), so this `??` hits exactly the ones we
+      // want to dim — it does NOT overwrite the semantic colors of the
+      // active rows (green approved, red conflict).
       //
-      // ÉS AHOL A SZÍN TOMPÍT, OTT A `dim` KIESIK (`fadedByColor`): a kettő
-      // EGYMÁSON egy egész fokozattal túl sötét (lásd a `FADED_COLOR` fejénél a
-      // három lépcsőt). Egy `dimOverride: true` szegmens (pl. a ` · ` szeparátor)
-      // ettől függetlenül dim marad — az EXPLICIT szándék, nem a fakulás
-      // mellékhatása.
-      // A NYUGALMI SZÍN A TÉMÁÉ (`undefined` = a terminál alapszíne) — SOSEM a
-      // miénk (wf31/59: a témát átíró `baseColor` mért hiba volt). Tompításkor
-      // viszont MINDEN szegmens a saját színéből tweenel (wf31/61) — a nevesített
-      // színek is, ezért nem `seg.color ?? …`, hanem teljes csere faded alatt.
+      // AND WHERE THE COLOR DIMS, `dim` DROPS OUT (`fadedByColor`): the two
+      // STACKED are a whole level too dark (see the three steps at the head
+      // of `FADED_COLOR`). A `dimOverride: true` segment (e.g. the ` · `
+      // separator) stays dim regardless — that's an EXPLICIT intent, not a
+      // side effect of fading.
+      // THE RESTING COLOR IS THE THEME'S (`undefined` = the terminal's base
+      // color) — NEVER ours (wf31/59: a `baseColor` overwriting the theme
+      // was a measured bug). While fading, though, EVERY segment tweens from
+      // its own color (wf31/61) — the named colors too, hence not
+      // `seg.color ?? …`, but a full swap under faded.
       color: faded ? fadePaint(seg) : seg.color,
       bold: seg.bold,
       dimColor: seg.dimOverride ?? (faded ? undefined : dim),
@@ -404,160 +447,186 @@ export function Row({
   return h(Box, null, ...out)
 }
 
-  // AZ EGYESÍTETT INFO-PANEL ('i'). KÉT SÁV, a KÖLTSÉG szerint elválasztva:
+  // THE UNIFIED INFO PANEL ('i'). TWO BANDS, split by COST:
   //
-  //   GYORS (fent): amit a queue-modell MÁR tud — dep-metszet, mergeMethod,
-  //     landolás-blokkolók, stacked-info. Nulla várakozás, mindig teljes.
-  //   MÉRT (lent): a merge-tree próbák eredménye. Amíg fut, ÉLŐ status-sor
-  //     ("mérés: 3/7 jelölt…"); amikor kész, beilleszkedik. Esc: megszakítás.
+  //   FAST (top): what the queue model ALREADY knows — dep intersection,
+  //     mergeMethod, landing blockers, stacked info. Zero wait, always
+  //     complete.
+  //   MEASURED (bottom): the result of the merge-tree probes. While running,
+  //     a LIVE status row ("measuring: 3/7 candidates…"); when done, it
+  //     settles in. Esc: abort.
   //
-  // A sávok NEM keverednek: a mérés alatt (és abortálás után) a mért állításokat
-  // NEM írjuk ki. Egy félbehagyott próba-sorozat se conflictot, se annak hiányát
-  // nem bizonyítja — a "✓ main: nincs conflict (mérve)" sor ott HAZUG lenne.
+  // The bands DON'T MIX: while measuring (and after an abort) the measured
+  // statements are NOT written. An interrupted probe sequence proves neither
+  // a conflict nor its absence — the "✓ main: no conflict (measured)" row
+  // would be a LIE there.
 //
-// A PANEL MOSTANTÓL OVERLAY, nem teljes képernyő: a lista TOMPÍTVA alatta marad.
-// A cím és a lábléc az overlay KERETÉÉ (core: overlayFrame) — a body csak a
-// tartalmat adja, tehát a cím/lábléc EGY forrásból jön minden overlayre, és nem
-// csúszhat szét panelenként (ez volt a keybind-hivatkozások régi bug-osztálya).
-// A HÁROM BODY (info / confirm / error) NEM Ink-fát ad, hanem SOR-LEÍRÓKAT:
-// `{ text, color?, dimColor?, bold?, key? }`.
+// THE PANEL IS NOW AN OVERLAY, not a full screen: the list stays rendered,
+// DIMMED, underneath. The title and footer belong to the overlay FRAME
+// (core: overlayFrame) — the body only supplies content, so title/footer
+// come from ONE source for every overlay, and can't drift apart panel by
+// panel (this was the old bug class for keybinding references).
+// THE THREE BODIES (info / confirm / error) don't return an Ink tree, but
+// ROW DESCRIPTORS: `{ text, color?, dimColor?, bold?, key? }`.
 //
-// MIÉRT (MÉRT BUG, ÉLŐ RENDERBŐL): a panelt a MAGASSÁG szerint el kell tudni
-// vágni (a `panelViewport` + `clipBodyLines` szerződése), és a MEGJELENÍTETT
-// sorok számához a SZÖVEGET kell megmérni — egy már összeállított Ink-fából a
-// tördelt sorszám nem olvasható ki. Az első változat pontosan ezért hazudott: a
-// nézet KIÍRTA, hogy "a panel csonkolva", de a törzs teljes egészében
-// renderelődött, és 12 soros terminálon a FEJLÉC kicsúszott.
+// WHY (a MEASURED bug, from a live render): the panel must be clippable BY
+// HEIGHT (the `panelViewport` + `clipBodyLines` contract), and the DISPLAYED
+// row count requires MEASURING the text — you can't read the wrapped line
+// count back out of an already-assembled Ink tree. The first version lied
+// for exactly this reason: the view STATED that "the panel is truncated",
+// but the body rendered in full, and on a 12-line terminal the HEADER
+// scrolled off.
 //
-// === A MÉRÉSI CAVEAT LÁBJEGYZETE — a Verdict-blokk progresszív disclosure-je ==
+// === THE MEASUREMENT CAVEAT FOOTNOTE — the Verdict block's progressive
+// disclosure ==
 //
-// A USER BEJELENTÉSE: a `Verdict: clean` alatti 3-4 soros magyarázat MINDEN
-// nem-blokkoló PR-on SZÓ SZERINT UGYANAZ, tehát warning fatigue-ot termel (a
-// negyedik PR-nál a user már át sem olvassa). Lábjegyzetet kért: jelölés + "több
-// info", és billentyűre nyíljon ki.
+// THE USER'S REPORT: the 3-4 line explanation under `Verdict: clean` is
+// LITERALLY THE SAME on EVERY non-blocking PR, so it produces warning
+// fatigue (by the fourth PR the user no longer even reads it). They asked
+// for a footnote: a marker + "more info", expanding on a keypress.
 //
-// A JELÖLÉS `…`, ÉS EZ NEM ÖNKÉNYES: ez a projekt MEGLÉVŐ "van még" idiómája —
-// a dep-fájllista (`… +N további`), az error-body (`… és további N sor`), a
-// panel-csonkolás és az AI-verdict csonkolása is ezt használja. Egy ötödik,
-// konkurrens jelölés (`*`) új szótárat nyitna ugyanarra a fogalomra.
+// THE MARKER IS `…`, AND THAT'S NOT ARBITRARY: this is the project's
+// EXISTING "there's more" idiom — the dep file list (`… +N more`), the error
+// body (`… and N more lines`), the panel truncation and the AI-verdict
+// truncation all use it. A fifth, competing marker (`*`) would open a new
+// vocabulary for the same concept.
 //
-// AZ AFFORDANCE A SORON VAN, NEM A LÁBLÉCBEN: a lábléc már 7 szegmens, és 100
-// oszloposnál a `clampCells` határán áll — egy nyolcadik szegmens ott MÁST
-// vágna le. A soron álló jelzés amúgy is erősebb: ott van, ahol a tartalom.
+// THE AFFORDANCE IS ON THE ROW, NOT IN THE FOOTER: the footer is already 7
+// segments, and at 100 columns it sits at `clampCells`'s limit — an eighth
+// segment there would cut off something ELSE. The on-row indicator is
+// stronger anyway — it's where the content is.
 //
-// AMI CSUKVA IS MEGMARAD (kötelem): a `git rebase` MAGA a UI EGYETLEN helye,
-// ahol a felszólítás elhangzik, és MÉRT tényen áll (a merge-tree MERGE-öt
-// szimulál, a CI REBASE-el — fixture-ön mérve: merge-tree exit 0, git rebase
-// CONFLICT). A csukott sor ezért az ACTIONABLE MAGOT hordozza ("a mérés
-// MERGE-öt szimulál, a CI REBASE-el"), csak a kifejtést és a parancsot rejti el.
+// WHAT STAYS EVEN WHEN CLOSED (a commitment): `git rebase` is the ONE place
+// in the WHOLE UI where this warning is stated, and it stands on a MEASURED
+// fact (the merge-tree simulates a MERGE, CI does a REBASE — measured on a
+// fixture: merge-tree exit 0, git rebase CONFLICT). The closed row therefore
+// carries the ACTIONABLE core ("the measurement simulates a MERGE, CI does a
+// REBASE"), and only hides the elaboration and the command.
 //
-// A NYITOTT ALAKBAN A LÉNYEG A BLOKK ELEJÉN áll: szűk terminálon a magasság-vágás
-// a VÉGÉT viszi el (`clipBodyLines`), tehát a fenntartás magja nem kerülhet a
-// blokk aljára.
+// IN THE OPEN FORM THE POINT SITS AT THE START OF THE BLOCK: on a narrow
+// terminal the height clip (`clipBodyLines`) takes away the END, so the core
+// of the caveat can't land at the bottom of the block.
 
-// (wf31/10) A MÉRÉSI SOROK IS A TOGGLE MÖGÉ KERÜLNEK — DE CSAK A `clean` ÁGON.
+// (wf31/10) THE MEASUREMENT ROWS ALSO GO BEHIND THE TOGGLE — BUT ONLY ON THE
+// `clean` BRANCH.
 //
-// A USER LELETE, szó szerint: "Az a két pipás sor még mindig nem tetszik. […] Egy
-// negatív információt fogalmaznak meg. Miért nincsenek a »Verdict: clean« rejtése
-// mögött?"
+// THE USER'S FINDING, verbatim: "Those two checkmark rows still bother me.
+// […] They state a negative fact. Why aren't they behind the »Verdict:
+// clean« collapse?"
 //
-// A MÉRT REDUNDANCIA a clean-panelen HÁROM sor, EGY állítással:
-//     ✓ main: nincs conflict (mérve) — a landolásod nincs veszélyben
-//     ✓ next-en belül: nincs ütközés (4 jelölt megmérve)
+// THE MEASURED REDUNDANCY on the clean panel is THREE rows, ONE statement:
+//     ✓ main: no conflict (measured) — your landing isn't at risk
+//     ✓ within next: no clash (4 candidates measured)
 //     Verdict: clean
-// A `clean` verdict DEFINÍCIÓ SZERINT azt jelenti, hogy egyik tengelyen sincs
-// conflict (lásd a bash `$verdict` levezetését: `mainConflict` → main-conflict,
-// `queueConflicts` → next-only-conflict, EGYÉBKÉNT clean). A két pipás sor tehát
-// a verdict KIFEJTÉSE, nem új információ — pontosan az, amit a wf31/4-ben a
-// negyedik (összegző) sorral már megtettünk. Ugyanaz a fogalom, ugyanaz a hely.
+// The `clean` verdict, BY DEFINITION, means neither axis has a conflict (see
+// the bash `$verdict` derivation: `mainConflict` → main-conflict,
+// `queueConflicts` → next-only-conflict, CLEAN otherwise). The two checkmark
+// rows are therefore the verdict's ELABORATION, not new information —
+// exactly what wf31/4 already did with the fourth (summary) row. Same
+// concept, same place.
 //
-// MIÉRT CSAK A `clean` ÁGON: a NEGATÍV ágakon a sor MAGA a hír. A
-// `✗ main: VALÓDI conflict — <fájlok>` a fájlneveket is hordozza (amit a verdict
-// nem), a `⚠ next-en belül: ütközik` alatt pedig a culprit-fájlsorok állnak. Ott
-// az elrejtés a legfontosabb információt vinné a toggle mögé — a szabály tehát
-// nem "a mérési sorok rejtve", hanem "a REDUNDANCIA rejtve".
+// WHY ONLY ON THE `clean` BRANCH: on the NEGATIVE branches, the row IS the
+// news. `✗ main: REAL conflict — <files>` also carries the file names (which
+// the verdict doesn't), and under `⚠ within next: clashes` sit the culprit
+// file rows. There, hiding it would take the most important information
+// behind the toggle — so the rule isn't "the measurement rows are hidden",
+// it's "the REDUNDANCY is hidden".
 
-// (wf31/30) A CSUKOTT/NYITOTT TOGGLE KIVEZETVE — KÉT ÁLLAPOT VAN, NEM HÁROM.
+// (wf31/30) THE CLOSED/OPEN TOGGLE REMOVED — THERE ARE TWO STATES, NOT
+// THREE.
 //
-// A USER DÖNTÉSE, szó szerint: "az info panelben három állapota van a detailed
-// infónak a main-nel szemben: idle (nincs infó, felajánlja a c-t), verdict
-// collapsed, és verdict expanded. És az Enter itt foglalt. Ez így nem jó. KETTŐ
-// állapot legyen. Idle és betöltött részletek. Igy felszabadul az Enter az info
-// toggle-ra".
+// THE USER'S DECISION, verbatim: "in the info panel there are three states
+// for the detailed info about main: idle (no info, offers c), verdict
+// collapsed, and verdict expanded. And Enter is taken here. This isn't
+// right. There should be TWO states. Idle and loaded details. That frees up
+// Enter for the info toggle."
 //
-// AMI MEGSZŰNT: a `caveatOpen` state, a `…`-affordance sor (`CAVEAT_HINT`), a
-// tömörített mag (`CAVEAT_GIST`) és a degradáló `caveatClosedLine`. A caveat
-// MOSTANTÓL MINDIG a kifejtett alakjában látszik, ha egyáltalán van mérés.
+// WHAT'S GONE: the `caveatOpen` state, the `…` affordance row
+// (`CAVEAT_HINT`), the condensed core (`CAVEAT_GIST`) and the degrading
+// `caveatClosedLine`. The caveat NOW ALWAYS shows in its expanded form, if
+// there's any measurement at all.
 //
-// MIÉRT NEM VESZÍTÜNK VELE: a toggle a wf31/4-ben azért született, hogy a MINDEN
-// PR-on azonos, 3-4 soros magyarázat ne termeljen warning fatigue-ot. Azóta
-// viszont a mérés maga EXPLICIT gesztus lett (`c`, wf31/10): a caveat CSAK akkor
-// jelenik meg, ha a user KÉRTE a mérést — tehát nincs mit „minden PR-on"
-// átolvasni. A fatigue-érv elesett, a toggle költsége (egy foglalt kulcs +
-// harmadik állapot) megmaradt.
+// WHY WE DON'T LOSE ANYTHING: the toggle was born in wf31/4 so that the
+// SAME 3-4 line explanation on EVERY PR wouldn't produce warning fatigue.
+// Since then, though, the measurement itself became an EXPLICIT gesture
+// (`c`, wf31/10): the caveat ONLY appears if the user REQUESTED the
+// measurement — so there's nothing to read on "every PR" anymore. The
+// fatigue argument fell away, the toggle's cost (a taken key + a third
+// state) remained.
 //
-// AZ ENTER ÍGY FELSZABADULT a panel-zárásra (lásd az app `key.return` ágát).
+// ENTER IS THEREFORE FREED UP for closing the panel (see the app's
+// `key.return` branch).
 
 /**
- * A caveat-lábjegyzet SOR-LEÍRÓI — a KIFEJTETT blokk.
+ * The caveat footnote's ROW DESCRIPTORS — the EXPANDED block.
  *
- * A `caveat` a `conflictAdvice` KÜLÖN mezője (`{ text, command, detail }` vagy
- * `null`). A `null` ág ÜRES listát ad, nem egy üres sort: caveat nélkül (stackelt
- * PR, main-conflict, nem mért sor) nincs mit kifejteni.
+ * `caveat` is `conflictAdvice`'s SEPARATE field (`{ text, command, detail }`
+ * or `null`). The `null` branch gives an EMPTY list, not an empty row: with
+ * no caveat (a stacked PR, a main conflict, an unmeasured row) there's
+ * nothing to expand.
  *
- * @param {Array} hidden (wf31/10) A blokk ELEJÉRE kerülő, KÉSZ sor-leírók — a
- *   `clean` ág két mérési sora. MIÉRT PARAMÉTER, és miért nem a `detail`
- *   stringjébe fűzve: ezek SZÍNEZETT, GLIFES sorok (`✓` + zöld/dim), a `detail`
- *   viszont egyetlen, dimmelt PRÓZA-blokk, amit a `wrapCells` tördel. Egy
- *   stringbe fűzve elvesztenék a színüket és a sortörésük is a próza-tördelésre
- *   csúszna — a `✓ main: …` és a `✓ next-en belül: …` egy bekezdésbe olvadna.
+ * @param {Array} hidden (wf31/10) The FINISHED row descriptors that land at
+ *   the START of the block — the `clean` branch's two measurement rows. WHY
+ *   A PARAMETER, and why not appended into the `detail` string: these are
+ *   COLORED, GLYPHED rows (`✓` + green/dim), while `detail` is a single,
+ *   dimmed PROSE block that `wrapCells` wraps. Appended into one string they
+ *   would lose their color, and their line breaks would slide into the
+ *   prose wrapping — the `✓ main: …` and the `✓ within next: …` would melt
+ *   into one paragraph.
  */
 function caveatLines(caveat, innerWidth, hidden = []) {
   if (!caveat) return []
-  // A PRÓZA a keret belső szélességére tördelve — a core wrapCells-ével, azzal a
-  // MÉRTÉKKEL, amivel a keret is számol (nem az Ink saját tördelésével, ami a
-  // keretet szétvetné). A folytatás-sorok 2 cellával behúzva, hogy a blokk
-  // egyben látszódjon.
+  // The PROSE wrapped to the frame's inner width — with the core's
+  // wrapCells, with the SAME measure the frame itself uses (not Ink's own
+  // wrapping, which would blow the frame apart). Continuation lines indented
+  // by 2 cells, so the block reads as one piece.
   //
-  // A BEHÚZÁS A TÖRDELÉS MÉRTÉKÉBE VAN BESZÁMÍTVA, nem utólag hozzátéve — MÉRT
-  // HIBA volt (élő 56 oszlopos render): a behúzást a `wrapCells` UTÁN adva a
-  // folytatás-sor CELLÁBAN túllógott (61 cella egy 60-as keretben), az Ink
-  // újratördelte, és egy szó önálló sorra került. A keret nem esett szét, de a
-  // `clipBodyLines` MÉRÉSE és a valóság elcsúszott — és a magasság-vágás
-  // MEGJELENÍTETT sorokat számol, tehát egy Ink-újratördelés több sort renderel,
-  // mint amennyit mértünk (a fejléc kicsúszásának mért osztálya).
+  // THE INDENT IS FACTORED INTO THE WRAP MEASURE, not added afterward — a
+  // MEASURED BUG (a live 56-column render): adding the indent AFTER
+  // `wrapCells` made the continuation line overrun IN CELLS (61 cells in a
+  // 60-cell frame), Ink re-wrapped it, and a single word landed on its own
+  // line. The frame didn't fall apart, but `clipBodyLines`'s MEASUREMENT and
+  // reality drifted apart — and the height clip counts DISPLAYED rows, so an
+  // Ink re-wrap renders more rows than we measured (the measured class
+  // behind the header scrolling off).
   //
-  // UGYANAZ AZ ELV, mint a `Row` behúzás-prefixe és a `listLayout` title-büdzséje
-  // között: EGY mérték, és a behúzás a büdzséből jön le, nem a sor végéhez adódik.
+  // THE SAME PRINCIPLE as between `Row`'s indent prefix and `listLayout`'s
+  // title budget: ONE measure, and the indent comes out of the budget, it
+  // isn't added onto the row's end.
   const CAVEAT_INDENT = '  '
   const proseRoom = Math.max(1, innerWidth - displayWidth(CAVEAT_INDENT))
-  // (wf31/32) AZ ÜRES `text` NEM SZÜL SORT. A `nextFrom: 'ci'` ágon nincs
-  // fenntartás (a CI tényleges rebase-e ment át, nem a mi merge-szimulációnk),
-  // tehát a caveat CSAK a `detail`-t hordozza. Egy üres prózából a naiv
-  // `⚠ ${text}` egy magányos `⚠`-ot adna — figyelmeztetés tartalom nélkül, ami a
-  // legrosszabb: a szem odaugrik, és nincs mit elolvasni.
+  // (wf31/32) AN EMPTY `text` DOESN'T PRODUCE A ROW. On the `nextFrom: 'ci'`
+  // branch there's no caveat (CI's actual rebase went through, not our merge
+  // simulation), so the caveat only carries `detail`. From an empty prose,
+  // the naive `⚠ ${text}` would give a lone `⚠` — a warning with no content,
+  // which is the worst case: the eye jumps to it, and there's nothing to
+  // read.
   const caveatText = String(caveat.text ?? '').trim()
   const prose = caveatText === '' ? [] : wrapCells(`⚠ ${caveatText}`, proseRoom)
-  // (wf31/4) A MÉRÉS EREDMÉNYE (`detail`) A NYITOTT BLOKK ELSŐ BEKEZDÉSE.
+  // (wf31/4) THE MEASUREMENT RESULT (`detail`) IS THE OPEN BLOCK'S FIRST
+  // PARAGRAPH.
   //
-  // A user lelete: a `Verdict: clean` alatti "A merge-tree próba NEM talált
-  // conflictot (N jelölt megmérve)…" mondat ugyanazt mondta, mint a Verdict ÉS a
-  // két mérési sor fölötte — "elrejtendő részlet". A mondat tehát ide került, a
-  // MEGLÉVŐ Enter-toggle mögé: csukva csak a `Verdict: clean` + az egysoros `…`
-  // affordance látszik, nyitva a mért tény is előjön.
+  // The user's finding: the "The merge-tree probe found NO conflict (N
+  // candidates measured)…" sentence under `Verdict: clean` said the same
+  // thing as the Verdict AND the two measurement rows above it —
+  // "a detail to hide". The sentence therefore moved here, behind the
+  // EXISTING Enter toggle: closed, only `Verdict: clean` + the one-line `…`
+  // affordance show, open, the measured fact also comes forward.
   //
-  // AZ ELREJTÉS NEM TÖRLÉS: a jelölt-szám a MÉRÉS TERJEDELMÉT mondja ki, ami
-  // attesztációs tény — a `detail` megőrzi.
+  // HIDING ISN'T DELETING: the candidate count states the MEASUREMENT'S
+  // SCOPE, which is an attestation fact — `detail` preserves it.
   //
-  // MIÉRT A BLOKK ELEJÉN, ÉS NEM A CAVEAT-PRÓZA UTÁN: a `detail` a MÉRT TÉNY, a
-  // `text` pedig a FENNTARTÁS róla — a tény előbb jön, mint a hozzá tartozó
-  // kikötés. Ez egyben a magasság-vágást is helyesen rendezi: a `clipBodyLines` a
-  // blokk VÉGÉT viszi el, tehát a legfontosabb rész nem kerülhet az aljára
-  // (ugyanaz az elv, ami e fejezet fejében ki van mondva).
+  // WHY AT THE START OF THE BLOCK, AND NOT AFTER THE CAVEAT PROSE: `detail`
+  // is the MEASURED FACT, `text` is the RESERVATION about it — the fact
+  // comes before the reservation attached to it. This also orders the
+  // height clip correctly: `clipBodyLines` takes away the block's END, so
+  // the most important part can't land at the bottom (the same principle
+  // stated at the head of this section).
   //
-  // DIMMELT, NEM SÁRGA: ez NEM figyelmeztetés, hanem egy mért, kedvező eredmény —
-  // a sárga a caveat sajátja (a valódi fenntartás). A szín-inflálás ugyanaz a
-  // hibaosztály, amit a Verdict-blokk zöldje kapcsán a modul kimond.
+  // DIMMED, NOT YELLOW: this is NOT a warning, but a measured, favorable
+  // result — yellow belongs to the caveat (the actual reservation). Color
+  // inflation here is the same error class this module calls out for the
+  // Verdict block's green.
   const detailLines = String(caveat.detail ?? '').trim() === ''
     ? []
     : wrapCells(String(caveat.detail), proseRoom).map((line, i) => ({
@@ -566,10 +635,11 @@ function caveatLines(caveat, innerWidth, hidden = []) {
         text: i === 0 ? line : `${CAVEAT_INDENT}${line}`,
       }))
   return [
-    // (wf31/10) A MÉRÉSI SOROK LEGELŐL: ezek a MÉRT TÉNYEK, a `detail` az
-    // összegzésük, a `prose` pedig a fenntartás róluk — a sorrend a konkréttól az
-    // általánosig megy. A blokk-vég vágása (`clipBodyLines`) így a legkevésbé
-    // fontos részt viszi el, ami e fejezet kimondott elve.
+    // (wf31/10) THE MEASUREMENT ROWS COME FIRST: these are the MEASURED
+    // FACTS, `detail` is their summary, and `prose` is the reservation about
+    // them — the order goes from the concrete to the general. The
+    // block-end clip (`clipBodyLines`) thus takes away the least important
+    // part first, which is this section's stated principle.
     ...hidden,
     ...detailLines,
     ...prose.map((line, i) => ({
@@ -577,363 +647,407 @@ function caveatLines(caveat, innerWidth, hidden = []) {
       color: 'yellow',
       text: i === 0 ? line : `${CAVEAT_INDENT}${line}`,
     })),
-    // A PARANCS CYAN, külön sorban: a panel MINDEN végrehajtandó parancsát így
-    // írja (a stackelés-ajánlás és a branch-név is cyan). A behúzás a
-    // "parancs, amit begépelsz" tipográfiája.
+    // THE COMMAND IN CYAN, on its own line: the panel writes every
+    // executable command this way (the stacking suggestion and the branch
+    // name are cyan too). The indent is the typography for "a command you'd
+    // type".
     //
-    // (wf31/32) ÜRES PARANCS → NINCS SOR: a `nextFrom: 'ci'` ágon nincs teendő (a
-    // PR már beépült), tehát egy üres, behúzott cyan sor csak MAGASSÁGOT vinne el a
-    // render-fából — ugyanaz a hibaosztály, amit a wf28/3-as gap-sor kimondott.
+    // (wf31/32) EMPTY COMMAND → NO ROW: on the `nextFrom: 'ci'` branch
+    // there's nothing to do (the PR already landed), so an empty, indented
+    // cyan row would only take up HEIGHT in the render tree — the same error
+    // class the wf28/3 gap row called out.
     ...(String(caveat.command ?? '').trim() === ''
       ? []
       : [{ key: 'cav-cmd', color: 'cyan', text: clampCells(`    ${caveat.command}`, innerWidth) }]),
-    // (wf31/30) A ZÁRÓ AFFORDANCE-SOR KIVEZETVE a toggle-lal együtt: nincs mit
-    // összecsukni, tehát egy `… Enter: összecsukás` sor DEAD KEY-t hirdetne (az
-    // Enter mostantól a PANELT zárja).
+    // (wf31/30) THE CLOSING AFFORDANCE ROW REMOVED along with the toggle:
+    // there's nothing to collapse, so a `… Enter: collapse` row would
+    // announce a DEAD KEY (Enter now closes the PANEL).
   ]
 }
 
-// A LEÍRÓ → Ink konverzió EGY helyen (renderLines) történik, a vágás UTÁN.
+// THE DESCRIPTOR → Ink conversion happens in ONE place (renderLines), AFTER
+// the clip.
 //
-// (wf31/30) A `caveatOpen` PARAMÉTER KIVEZETVE: a caveat MINDIG kifejtve látszik
-// (két állapot: nincs mérés / van mérés). Az indoklás a `caveatLines` fejénél áll.
+// (wf31/30) THE `caveatOpen` PARAMETER REMOVED: the caveat ALWAYS shows
+// expanded (two states: no measurement / measurement present). The rationale
+// is at the head of `caveatLines`.
 export function infoBody(info, innerWidth = 100, reviewLines = []) {
   const model = buildInfoModel(info)
   const { row, fast, slow } = model
   const dep = fast.dep
-  // (wf31/10) A MÉRT SÁV KÉT TENGELY-SORA — EGY helyen összeállítva, mert KÉT
-  // helyre kell: `clean` verdicten a caveat-toggle MÖGÉ (`hidden`), egyébként a
-  // látható részbe. Két másolatban írva pontosan az az elcsúszás jönne, amit ez a
-  // modul máshol is tilt (a bash riportjával EGYEZŐ mondatokat egy teszt köti —
-  // két helyre írva az egyik példány maradna le a javításokról).
+  // (wf31/10) THE MEASURED BAND'S TWO AXIS ROWS — assembled in ONE place,
+  // because it's needed in TWO places: on a `clean` verdict, BEHIND the
+  // caveat toggle (`hidden`), otherwise in the visible part. Written in two
+  // copies it would produce exactly the drift this module bans elsewhere too
+  // (a test ties these sentences to MATCH the bash report — written in two
+  // places, one copy would fall behind on fixes).
   //
-  // A `slow.state !== 'done'` ágakon ÜRES: nincs mért diagnózis, tehát nincs mit
-  // sorba tenni (a `measuring`/`aborted`/`error` ágak SAJÁT sorokat adnak).
+  // The `slow.state !== 'done'` branches are EMPTY: there's no measured
+  // diagnosis, so there's nothing to put in the list (the `measuring`/
+  // `aborted`/`error` branches supply THEIR OWN rows).
   //
-  // A QUEUE-TENGELY SOR-PÁRJA — GLIF = KATEGÓRIA, SZÍN = SÚLY.
+  // THE QUEUE AXIS ROW PAIR — GLYPH = CATEGORY, COLOR = WEIGHT.
   //
-  // A USER BEJELENTÉSE: a main-ág zöld+pipás volt, a queue-ág pipa nélküli és
-  // szürke — ez INKONZISZTENS SÚLYT sugallt, holott mindkettő ugyanolyan mért
-  // tény, ugyanabból a próba-sorozatból.
+  // THE USER'S REPORT: the main branch was green+checkmarked, the queue
+  // branch was checkmark-less and gray — this suggested an INCONSISTENT
+  // WEIGHT, even though both are equally measured facts from the same probe
+  // sequence.
   //
-  // A JAVÍTÁS KÉT RÉSZE:
-  //   (1) a `✓` bekerül a pozitív queue-ágra is (a glif a KATEGÓRIÁT mondja:
-  //       "megmértük, és rendben van");
-  //   (2) DE a sor DIM MARAD, nem lesz zöld. MIÉRT NEM ZÖLD: a zöld a
-  //       MAIN-tengelyé — az dönti el, veszélyben van-e a landolás. Ha a queue-ág
-  //       is zöldet kapna, a zöld INFLÁLÓDNA, és a main mért ELSŐBBSÉGE elmosódna
-  //       (a fordított hiba ugyanabból a családból).
+  // THE FIX HAS TWO PARTS:
+  //   (1) the `✓` also appears on the positive queue axis (the glyph states
+  //       the CATEGORY: "we measured it, and it's fine");
+  //   (2) BUT the row STAYS DIM, it doesn't turn green. WHY NOT GREEN: green
+  //       belongs to the MAIN axis — that's what decides whether the landing
+  //       is at risk. If the queue axis also got green, green would
+  //       INFLATE, and the main axis's measured PRECEDENCE would blur (the
+  //       reverse error, from the same family).
   //
-  // A MONDATSZERKEZET PÁRHUZAMOS: EGY alany ("next-en belül"), KÉT állítmány
-  // ("nincs ütközés" / "ütközik"). A régi pár két KÜLÖN fogalmat nevezett meg
-  // ("queue-belső ütközés" vs. "a next-en belül"), amitől a két sor nem is
-  // látszott egy tengely két állásának.
+  // THE SENTENCE STRUCTURE IS PARALLEL: ONE subject ("within next"), TWO
+  // predicates ("no clash" / "clashes"). The old pair named two SEPARATE
+  // concepts ("intra-queue clash" vs. "within next"), which kept the two
+  // rows from even reading as two states of one axis.
   //
-  // A ⚠ (text-presentation, 1 cella) az EMOJI ⚠️ (2 cella) HELYETT — MÉRVE valódi
-  // terminálban (tmux cursor_x: 2 vs. 1), és a `displayWidth` MINDKETTŐT helyesen
-  // számolja (a VS16-lookahead miatt), tehát a váltás a cella-aritmetikát NEM
-  // érinti; a sor 3 cellával rövidebb is lett. A text-alak amúgy is ELŐZMÉNY a
-  // kódbázisban: a caveat-sorok (ai-review-view) és a sor-flagek (rows) is így írják.
+  // The ⚠ (text presentation, 1 cell) INSTEAD OF the emoji ⚠️ (2 cells) —
+  // MEASURED in a real terminal (tmux cursor_x: 2 vs. 1), and `displayWidth`
+  // counts BOTH correctly (due to the VS16 lookahead), so the switch does
+  // NOT affect the cell arithmetic; the row also got 3 cells shorter. The
+  // text form was already PRECEDENT in the codebase anyway: the caveat rows
+  // (ai-review-view) and the row flags (rows) write it this way too.
   //
-  // A CULPRIT-FÁJLSOROK CYAN-ok, mint a dep-fájllista: ugyanaz a fogalom
-  // (érintett fájlok), tehát ugyanaz a szín — szín nélkül a két fájllista két
-  // külön dolognak látszott.
+  // THE CULPRIT FILE ROWS ARE CYAN, like the dep file list: same concept
+  // (affected files), hence the same color — without color the two file
+  // lists would look like two separate things.
   const measurementLines = slow.state !== 'done' ? [] : [
     slow.diag.mainConflict
-      ? { key: 'mt-main', color: 'red', text: `✗ main: VALÓDI conflict — ${slow.diag.mainConflictFiles.join(', ')}` }
-      : { key: 'mt-main', color: 'green', text: '✓ main: nincs conflict (mérve) — a landolásod nincs veszélyben' },
+      ? { key: 'mt-main', color: 'red', text: `✗ main: REAL conflict — ${slow.diag.mainConflictFiles.join(', ')}` }
+      : { key: 'mt-main', color: 'green', text: '✓ main: no conflict (measured) — your landing is not at risk' },
     ...(slow.diag.queueConflicts.length > 0
       ? [
-          { key: 'mt-q', color: 'yellow', text: `⚠ next-en belül: ütközik (${slow.diag.probed} jelölt megmérve)` },
+          { key: 'mt-q', color: 'yellow', text: `⚠ within next: clashes (${slow.diag.probed} candidates measured)` },
           ...slow.diag.queueConflicts.map((c) =>
             ({ key: `cul-${c.number}`, color: 'cyan', text: `    #${c.number}  ${c.files.join(', ')}` })),
         ]
-      // (wf31/32) A SOR KIMONDJA, HONNAN TUDJUK — a `nextFrom` mezőből, nem a
-      // `probed` számból. A `0 jelölt megmérve` a `ci` ágon HAZUG lenne: ott nem
-      // mértünk, hanem a next gráfjából tudjuk (a CI kumulatív rebase-e átment). A
-      // `probed: 0` amúgy is KÉTFÉLEKÉPPEN áll elő („megkerültük" / „nincs
-      // jelölt"), tehát következtetni sem lehetne belőle.
+      // (wf31/32) THE ROW STATES HOW WE KNOW — from the `nextFrom` field, not
+      // from the `probed` count. `0 candidates measured` would be a LIE on
+      // the `ci` branch: there we didn't measure, we know it from next's
+      // graph (CI's cumulative rebase went through). `probed: 0` also arises
+      // TWO DIFFERENT WAYS ("we skipped it" / "no candidates"), so it
+      // couldn't be inferred from either.
       : slow.diag.nextFrom === 'ci'
-      ? [{ key: 'mt-q', dimColor: true, text: '✓ next: beépült (a CI kumulatív rebase-e átment)' }]
-      : [{ key: 'mt-q', dimColor: true, text: `✓ next-en belül: nincs ütközés (${slow.diag.probed} jelölt megmérve)` }]),
+      ? [{ key: 'mt-q', dimColor: true, text: '✓ next: landed (CI\'s cumulative rebase went through)' }]
+      : [{ key: 'mt-q', dimColor: true, text: `✓ within next: no clash (${slow.diag.probed} candidates measured)` }]),
   ]
-  // A `clean` VERDICT A REJTÉS KAPUJA — a MÉRT verdictből, nem a sorok
-  // tartalmából visszakövetkeztetve. MIÉRT A VERDICT: a bash `$verdict`-je a
-  // DÖNTÉS forrása (`mainConflict` → main-conflict, `queueConflicts` →
-  // next-only-conflict, egyébként clean), tehát ez az EGYETLEN hely, ahol a
-  // "nincs semmi baj" tény egyetlen mezőben áll. A sorokból következtetni
-  // (mindkettő `✓`-vel kezdődik?) szöveg-parszolás lenne a MÉRT adat helyett.
+  // THE `clean` VERDICT IS THE HIDING GATE — from the MEASURED verdict, not
+  // inferred back from the rows' content. WHY THE VERDICT: the bash
+  // `$verdict` is the SOURCE of the decision (`mainConflict` →
+  // main-conflict, `queueConflicts` → next-only-conflict, clean otherwise),
+  // so this is the ONE place where the "nothing's wrong" fact lives in a
+  // single field. Inferring from the rows (do both start with `✓`?) would be
+  // text-parsing instead of using the MEASURED data.
   const verdictClean = slow.state === 'done' && slow.diag.verdict === 'clean'
-  // A BRANCH-NÉV külön sorban, KÖZVETLENÜL a merge-method alatt (user-kérés: a
-  // method a névből ellenőrizhető, tehát a kettő egymás mellett kell). A
-  // csonkolás a keret belső szélességéhez van kötve, és a "branch: " előtag
-  // szélességét is levonjuk — különben pont az előtaggal lógna túl a sor.
+  // The branch name on its own line, DIRECTLY under the merge method
+  // (user request: the method can be checked from the name, so the two
+  // belong next to each other). The truncation is tied to the frame's inner
+  // width, and the "branch: " prefix's width is subtracted too — otherwise
+  // the row would overrun by exactly the prefix.
   const BRANCH_PREFIX = 'branch: '
   const branchRoom = Math.max(1, innerWidth - displayWidth(BRANCH_PREFIX))
   return [
 
-    // --- AZ AI-REVIEW SZEKCIÓ (3) — LEGFELÜL, ha van -----------------------
+    // --- THE AI-REVIEW SECTION (3) — AT THE VERY TOP, if present ----------
     //
-    // A user 3. pontja: a megerősítés, a progressz, a végállapot, a findingok
-    // rövid listája és a betöltés-ajánlat MIND a PR-panelben él. A szekció a
-    // panel TETEJÉN áll: futó review alatt ez a legfrissebb (másodpercenként
-    // mozgó) információ, és a user pontosan ezért nyitja a panelt. A sorokat a
-    // core tiszta függvénye adja (aiReviewPanelLines), cellában clampelve.
+    // The user's 3rd point: the confirmation, the progress, the end state,
+    // the findings' short list and the load offer ALL live in the PR panel.
+    // The section sits at the TOP of the panel: during a running review this
+    // is the freshest (moving every second) information, and that's exactly
+    // why the user opens the panel. The rows come from the core's pure
+    // function (aiReviewPanelLines), clamped in cells.
     ...(reviewLines.length > 0 ? [...reviewLines, { text: ' ' }] : []),
 
-    // --- GYORS SÁV -------------------------------------------------------
-    { dimColor: true, text: `állapot: ${fast.state}${fast.mergeMethod ? ` · merge-method: ${fast.mergeMethod}` : ''}` },
-    // A branch neve a metódus FORRÁSA: a prefix (`squash-`/`rebase-`/minden más)
-    // dönti el a metódust, tehát ez a sor az, amivel a user a fenti
-    // merge-method sort ELLENŐRZI. Ezért áll közvetlenül alatta, és ezért
-    // középen csonkolunk (a prefix ÉS a névvég is látszik) — lásd branchLabel.
+    // --- FAST BAND ---------------------------------------------------------
+    { dimColor: true, text: `state: ${fast.state}${fast.mergeMethod ? ` · merge-method: ${fast.mergeMethod}` : ''}` },
+    // The branch name is the SOURCE of the method: the prefix
+    // (`squash-`/`rebase-`/anything else) decides the method, so this row is
+    // what the user uses to CHECK the merge-method row above. That's why it
+    // sits directly under it, and why it's truncated in the middle (both the
+    // prefix AND the name's tail stay visible) — see branchLabel.
     { color: 'cyan', text: `${BRANCH_PREFIX}${branchLabel(fast.headRefName, branchRoom)}` },
     ...(fast.stackedOn !== null
-      ? [{ color: 'cyan', text: `⬆️ stackelt PR — a talapzata a #${fast.stackedOn}, a sorsa ott dől el` }]
+      ? [{ color: 'cyan', text: `⬆️ stacked PR — its base is #${fast.stackedOn}, its fate is decided there` }]
       : []),
     ...(fast.landableBlockers.length > 0
       ? [
-          { color: 'yellow', text: 'a landolás blokkolói:' },
-          // A KULCSOK PREFIXÁLTAK, nem puszta indexek. Ez a panel EGY Box
-          // gyerekei közé HÁROM listát terít szét (blokkolók, közös fájlok,
-          // culpritok); puszta index mellett mindhárom a 0-ról indulna, és a
-          // React ("two children with the same key, `0`") duplikálhatja vagy
-          // ELHAGYHATJA a sorokat. Élő renderben ez négy warningot adott.
+          { color: 'yellow', text: 'landing blockers:' },
+          // THE KEYS ARE PREFIXED, not bare indices. This panel spreads
+          // THREE lists across the children of ONE Box (blockers, shared
+          // files, culprits); with bare indices all three would start from
+          // 0, and React ("two children with the same key, `0`") could
+          // duplicate or DROP rows. In a live render this produced four
+          // warnings.
           ...fast.landableBlockers.map((b, i) => ({ key: `blk-${i}`, color: 'yellow', text: `    · ${b}` })),
         ]
-      : [{ color: 'green', text: '✓ landolható (approved + green + mergeable)' }]),
+      : [{ color: 'green', text: '✓ landable (approved + green + mergeable)' }]),
     { text: ' ' },
     dep.hasDep
-      ? { color: 'cyan', text: `⚡ dep: #${dep.dep} (a queue-ban ELŐTTE áll, még nyitott)` }
+      ? { color: 'cyan', text: `⚡ dep: #${dep.dep} (sits BEFORE it in the queue, still open)` }
       : { dimColor: true, text: dep.summary },
     ...(dep.hasDep
       ? dep.filesUnknown
-        // Fail-closed dep adathiánnyal: a függés ténye áll, a MIBEN nem. Ezt
-        // ki kell mondani — az üres fájl-lista NEM "nincs közös fájl".
+        // Fail-closed with missing dep data: the fact of the dependency
+        // stands, WHAT it's in doesn't. This must be stated — an empty file
+        // list does NOT mean "no shared files".
         ? [
-            { color: 'yellow', text: '⚠️ a közös fájlok listája NEM tudható' },
-            { dimColor: true, text: '   (a files-adat hiányzik — nagy PR-nál a GitHub limitálja)' },
-            { dimColor: true, text: '   a függést ezért fail-closed jelentjük: inkább jelezzük, mint elnyeljük' },
+            { color: 'yellow', text: '⚠️ the list of shared files is NOT knowable' },
+            { dimColor: true, text: '   (the files data is missing — GitHub limits it on a large PR)' },
+            { dimColor: true, text: '   we therefore report the dependency fail-closed: better to flag it than swallow it' },
           ]
         : [
-            { text: `közös fájlok (${dep.files.length}):` },
+            { text: `shared files (${dep.files.length}):` },
             ...dep.shown.map((f, i) => ({ key: `depf-${i}`, color: 'cyan', text: `    ${f}` })),
             ...(dep.more > 0 ? [{ dimColor: true, text: `    ${dep.moreLabel}` }] : []),
-            // A metszet HEURISZTIKA, a conflict MÉRÉS. Ezt azért mondjuk ki,
-            // hogy a user ne olvasson mért tényt egy fájl-metszetből — a mért
-            // választ a panel alsó sávja adja.
-            { dimColor: true, text: 'a metszet nem jelent conflictot — azt az alábbi mérés adja' },
+            // The intersection is a HEURISTIC, the conflict is a
+            // MEASUREMENT. We state this so the user doesn't read a measured
+            // fact out of a file intersection — the measured answer comes
+            // from the panel's lower band.
+            { dimColor: true, text: 'the intersection does not mean a conflict — the measurement below gives that answer' },
           ]
       : []),
     { text: ' ' },
 
-    // --- MÉRT SÁV --------------------------------------------------------
+    // --- MEASURED BAND -------------------------------------------------
     ...(!model.measurable
-      ? [{ dimColor: true, text: 'conflict-mérés: nincs — a stackelt PR sorsa a talapzatán dől el, diagnosztizáld azt' }]
+      ? [{ dimColor: true, text: 'conflict measurement: none — a stacked PR\'s fate is decided by its base, diagnose that' }]
       : slow.state === 'measuring'
       ? [
           { color: 'cyan', text: `⏳ ${slow.label}` },
-          { dimColor: true, text: '   (merge-tree próbák a queue-ban előtte álló PR-okra — Esc: megszakítás)' },
+          { dimColor: true, text: '   (merge-tree probes against the PRs ahead of it in the queue — Esc: abort)' },
         ]
       : slow.state === 'aborted'
       ? [
           { color: 'yellow', text: `⚠️ ${slow.label}` },
-          { dimColor: true, text: '   a részleges mérés NEM bizonyít se conflictot, se annak hiányát' },
+          { dimColor: true, text: '   a partial measurement proves neither a conflict nor its absence' },
         ]
       : slow.state === 'error'
       ? [
           { color: 'red', text: `✗ ${slow.label}` },
-          { dimColor: true, text: '   a mérés NEM futott le — ebből nem következik, hogy nincs conflict' },
+          { dimColor: true, text: '   the measurement did NOT run — this does not imply there is no conflict' },
         ]
       : slow.state === 'done'
       ? [
-          // (wf31/10) A `clean` ÁGON A KÉT MÉRÉSI SOR A TOGGLE MÖGÉ MEGY — a
-          // szekció fejében álló indoklás szerint (a verdict kifejtése, nem új
-          // információ). A `measurementLines` alább áll össze; itt a `clean`
-          // esetben ÜRES a látható rész, és a sorok a `caveatLines` `hidden`
-          // paraméterén jutnak a nyitott blokkba.
+          // (wf31/10) ON THE `clean` BRANCH THE TWO MEASUREMENT ROWS MOVE
+          // BEHIND THE TOGGLE — per the rationale stated at the head of the
+          // section (the verdict's elaboration, not new information). The
+          // `measurementLines` assemble below; here, in the `clean` case,
+          // the visible part is EMPTY, and the rows reach the open block
+          // through `caveatLines`'s `hidden` parameter.
           //
-          // A NEGATÍV ágak VÁLTOZATLANOK: ott a sor maga a hír (fájlnevekkel,
-          // culprit-listával), tehát nem rejthető.
+          // THE NEGATIVE branches ARE UNCHANGED: there the row IS the news
+          // (with file names, culprit list), so it can't be hidden.
           ...(verdictClean ? [] : measurementLines),
-          // A GAP-SOR CSAK AKKOR KELL, HA VAN MIT ELVÁLASZTANI: `clean` ágon a
-          // mérési sorok a toggle mögé kerültek, tehát a `Verdict` a szekció ELSŐ
-          // sora — egy fölötte álló üres sor ott dupla kihagyást adna (a MÉRT SÁV
-          // fölött már van egy). Egy üres sor-leíró ugyanazt a MAGASSÁGOT viszi el
-          // a render-fából, mint egy tartalmas (a `clipBodyLines` MEGJELENÍTETT
-          // sorokat számol) — ez a wf28/3 gap-sorával megegyező hibaosztály.
+          // THE GAP ROW IS ONLY NEEDED IF THERE'S SOMETHING TO SEPARATE: on
+          // the `clean` branch the measurement rows moved behind the toggle,
+          // so `Verdict` is the section's FIRST row — an empty row above it
+          // would there add a double gap (there's already one above the
+          // MEASURED BAND). An empty row descriptor takes up the same HEIGHT
+          // in the render tree as a filled one (`clipBodyLines` counts
+          // DISPLAYED rows) — this is the same error class as wf28/3's gap
+          // row.
           ...(verdictClean ? [] : [{ text: ' ' }]),
           { bold: true, text: `Verdict: ${slow.diag.verdict}` },
-          // (wf31/4) AZ ÜRES SUMMARY NEM SZÜL SORT. A `clean` ág summary-ja
-          // ÜRES lett (a mérési eredmény a caveat `detail`-jébe került — lásd a
-          // diagnosis `conflictAdvice` clean-ágát), és egy üres sor-leíró
-          // ugyanazt a MAGASSÁGOT vinné el a render-fából, mint egy tartalmas:
-          // a `clipBodyLines` MEGJELENÍTETT sorokat számol. Ez a `menuExtraRows`
-          // gap-sorával megegyező hibaosztály (wf28/3) — a sor tehát MEG SEM
-          // SZÜLETIK, nem "üresen renderelődik".
-          // (wf31/52) A SUMMARY TÖRDELVE, NEM CSONKOLVA. A user lelete: "a
-          // verdictben le van cappelve vízszintesen a stack célra vonatkozó
-          // megjegyzés" — a mondat közepén, "ha funkcionális…"-nál.
+          // (wf31/4) AN EMPTY SUMMARY DOESN'T PRODUCE A ROW. The `clean`
+          // branch's summary became EMPTY (the measurement result moved into
+          // the caveat's `detail` — see the diagnosis's `conflictAdvice`
+          // clean branch), and an empty row descriptor would take the same
+          // HEIGHT out of the render tree as a filled one: `clipBodyLines`
+          // counts DISPLAYED rows. This is the same error class as
+          // `menuExtraRows`'s gap row (wf28/3) — the row therefore ISN'T
+          // EVEN BORN, it doesn't "render empty".
+          // (wf31/52) THE SUMMARY IS WRAPPED, NOT TRUNCATED. The user's
+          // finding: "in the verdict, the note about the stacking target is
+          // horizontally capped" — mid-sentence, at "if functionally…".
           //
-          // AZ OK: a `renderLines` a render-modul `Text`-jét használja, ami
-          // `wrap: 'truncate'` (a resize-flicker miatt, wf31/39) — egy hosszú
-          // egysoros leíró tehát NÉMÁN a jobb szélen véget ér. A summary itt 3-4
-          // mondat, vagyis STRUKTURÁLISAN nem egysoros tartalom.
+          // THE CAUSE: `renderLines` uses the render module's `Text`, which
+          // is `wrap: 'truncate'` (because of the resize flicker, wf31/39) —
+          // a long single-line descriptor therefore SILENTLY ends at the
+          // right edge. The summary here is 3-4 sentences, i.e.
+          // STRUCTURALLY not single-line content.
           //
-          // A JAVÍTÁS a `wrapCells`: cellában tördel a panel belső szélességére,
-          // és MINDEN sor önálló leíró lesz. Ugyanaz a minta, amit az AI-összegző
-          // már használ (`aiReviewPanelLines`) — ott is 2-4 mondatot kell
-          // megjeleníteni, ugyanabban a panelben.
+          // THE FIX is `wrapCells`: wraps in cells to the panel's inner
+          // width, and EVERY line becomes its own descriptor. The same
+          // pattern the AI summary already uses (`aiReviewPanelLines`) —
+          // there too, 2-4 sentences need to be shown, in the same panel.
           //
-          // SOR-PLAFON NINCS: a `clipBodyLines` a panel MAGASSÁGÁT amúgy is
-          // kezeli, és KIMONDJA a csonkolást ("… a panel csonkolva"). Egy második,
-          // itteni plafon pont azt a hibát hozná vissza, amit az AI-összegzőnél a
-          // wf31/50 megszüntetett: a verdict a legfontosabb tartalom a panelben.
+          // NO ROW CEILING: `clipBodyLines` already handles the panel's
+          // HEIGHT anyway, and STATES the truncation ("… panel truncated").
+          // A second, local ceiling here would bring back exactly the bug
+          // wf31/50 fixed for the AI summary: the verdict is the most
+          // important content in the panel.
           ...(String(slow.advice.summary ?? '').trim() === ''
             ? []
             : wrapCells(String(slow.advice.summary).trim(), innerWidth)
                 .map((t, i) => ({ key: `adv-sum${i}`, text: t }))),
-          // (wf31/68) A PARANCS INFORMÁCIÓKÉNT MARAD, AJÁNLÁSKÉNT NEM. A `s` gomb
-          // a láblécben kínálja fel a végrehajtást, de az CSAK a PR SAJÁT
-          // branchén működik (`doStack` branch-ellenőrzése) — aki máshol áll,
-          // annak a parancs kell. A fejléc ezért feltételt mond, nem javaslatot:
-          // hogy funkcionálisan rá épülsz-e, azt a gép nem tudja.
+          // (wf31/68) THE COMMAND STAYS AS INFORMATION, NOT AS A
+          // RECOMMENDATION. The `s` key in the footer offers to execute it,
+          // but that ONLY works on the PR's OWN branch (`doStack`'s branch
+          // check) — whoever is standing elsewhere needs the command. The
+          // heading therefore states a condition, not a suggestion: whether
+          // you functionally depend on it, the machine can't know.
           ...(slow.advice.offerStack
             ? [
                 { text: ' ' },
-                { dimColor: true, text: `Ha funkcionálisan a #${slow.advice.stackOn}-re épülsz, a PR saját branchéről:` },
+                { dimColor: true, text: `If you functionally build on #${slow.advice.stackOn}, from the PR's own branch:` },
                 { color: 'cyan', text: `  ${slow.advice.command}` },
               ]
             : []),
-          // A MÉRÉSI CAVEAT LÁBJEGYZETE — LEGALUL, a TEENDŐK UTÁN.
+          // THE MEASUREMENT CAVEAT FOOTNOTE — AT THE VERY BOTTOM, AFTER THE
+          // TODOS.
           //
-          // MIÉRT A VÉGÉN: ez FENNTARTÁS, nem teendő. A summary (mért tény) és a
-          // stackelés-ajánlás (végrehajtható lépés) elé kerülve pont azt a
-          // sorrendet állítaná vissza, ami a warning fatigue-ot termelte — a user
-          // a tennivaló előtt olvasott egy minden PR-on azonos bekezdést.
+          // WHY AT THE END: this is a RESERVATION, not a to-do. Placed
+          // before the summary (measured fact) and the stacking suggestion
+          // (an actionable step) it would restore exactly the order that
+          // produced the warning fatigue — the user reading a paragraph
+          // identical on every PR before the to-do.
           //
-          // A `caveat` a `conflictAdvice` KÜLÖN mezője (nem a summary vége): a
-          // disclosure így CSAK a fenntartást viszi el, a teendő látható marad.
-          // (wf31/10) A `clean` ág MÉRÉSI SORAI a NYITOTT blokkba mennek. A
-          // negatív ágakon a `hidden` ÜRES — ott a sorok a látható részen állnak
-          // (a `verdictClean` kapuja fentebb), tehát duplikáció nem keletkezhet.
+          // `caveat` is `conflictAdvice`'s SEPARATE field (not the summary's
+          // tail): the disclosure this way ONLY takes away the reservation,
+          // the to-do stays visible.
+          // (wf31/10) On the `clean` branch, the MEASUREMENT ROWS go into
+          // the OPEN block. On the negative branches, `hidden` is EMPTY —
+          // there the rows sit in the visible part (the `verdictClean` gate
+          // above), so no duplication can occur.
           ...caveatLines(
             slow.advice.caveat,
             innerWidth,
             verdictClean ? measurementLines : [],
           ),
         ]
-      // (wf31/10) A NEM MÉRT ÁLLAPOT — EZ AZ ÚJ DEFAULT, ÉS NEM LEHET ÜRES.
+      // (wf31/10) THE UNMEASURED STATE — THIS IS THE NEW DEFAULT, AND IT
+      // CANNOT BE EMPTY.
       //
-      // Korábban ide `[]` került (a panel-nyitás mindig mért, tehát ez az ág
-      // gyakorlatilag elérhetetlen volt). Most, hogy a mérés EXPLICIT gesztus
-      // (`c`), ez a TIPIKUS állapot — és egy üres sáv itt a legdrágább hiba lenne:
-      // a user "nincs conflict"-ként olvasná a hallgatást. Ez ugyanaz az érv, ami
-      // az `openInfo` cache-találat-ágában is ki van mondva ("a cache-találat sem
-      // lehet csendes").
+      // Previously `[]` went here (opening the panel always measured, so
+      // this branch was practically unreachable). Now that the measurement
+      // is an EXPLICIT gesture (`c`), this is the TYPICAL state — and an
+      // empty band here would be the most expensive mistake: the user would
+      // read the silence as "no conflict". This is the same argument stated
+      // in `openInfo`'s cache-hit branch too ("a cache hit can't be silent
+      // either").
       //
-      // A CI-BŐL SZÁRMAZÓ TUDÁS VISZONT NEM HALLGATÁS: a `next-conflict` /
-      // `next-blocked` címke és a next-gráfba való beépülés a queue-modellből
-      // ISMERT, mérés nélkül. A sor tehát KIMONDJA, amit tudunk, és a `c`-t csak
-      // arra ajánlja, amit NEM tudunk (kivel ütközöm, ütközöm-e a main-nel).
+      // KNOWLEDGE FROM CI, THOUGH, IS NOT SILENCE: the `next-conflict` /
+      // `next-blocked` label and having landed in next's graph is KNOWN from
+      // the queue model, without measuring. The row therefore STATES what we
+      // know, and only offers `c` for what we DON'T know (who I clash with,
+      // whether I clash with main).
       : [
-          // A PROVIDER-FÜGGŐ SÁV: az integrációs branch rebuild-állapotáról szóló
-          // sorok CSAK akkor jelennek meg, ha a modellt olyan provider adta, ami
-          // ezt MÉRI (azt a `classification` jelenléte árulja el — a gh/git
-          // provider szándékosan nem tölti, lásd providers/github.mjs).
+          // THE PROVIDER-DEPENDENT BAND: the rows about the integration
+          // branch's rebuild status ONLY appear if the model came from a
+          // provider that MEASURES this (given away by the presence of
+          // `classification` — the gh/git provider deliberately doesn't
+          // load it, see providers/github.mjs).
           //
-          // MIÉRT NEM MARADHATNAK BENT MINDIG: enélkül a panel egy nem létező
-          // integrációs branch rebuild-jéről állítana valamit, a PR saját
-          // állapotából „következtetve" — vagyis a MÉRT és a KÖVETKEZTETETT
-          // tudás mosódna össze, ami pont az a hazug-státusz hibaosztály,
-          // amit ez a panel mindenhol máshol elkerül.
+          // WHY THEY CAN'T ALWAYS STAY: without this, the panel would state
+          // something about a non-existent integration branch rebuild,
+          // "inferred" from the PR's own state — i.e. MEASURED and INFERRED
+          // knowledge would blur together, exactly the lying-status error
+          // class this panel avoids everywhere else.
           ...(fast.classification === null || fast.classification === undefined
             ? []
             : fast.state === 'queue'
-            // BEÉPÜLT A NEXT-BE: a CI kumulatív rebase-e ÁTMENT. Ez ERŐSEBB tény,
-            // mint a lokális páros próba (az merge-öt szimulál) — tehát itt a
-            // mérés nem hozzáad, hanem bizonytalanabb választ adna ugyanarra.
-            ? [{ key: 'mt-ci', color: 'green', text: '✓ next: beépült (a CI kumulatív rebase-e átment)' }]
+            // LANDED IN NEXT: CI's cumulative rebase WENT THROUGH. This is a
+            // STRONGER fact than the local pairwise probe (which simulates a
+            // merge) — so here the measurement wouldn't add anything, it
+            // would give a less certain answer to the same question.
+            ? [{ key: 'mt-ci', color: 'green', text: '✓ next: landed (CI\'s cumulative rebase went through)' }]
             : fast.state === 'conflict'
-            // KIESETT: a címke ezt mondja, de azt NEM, hogy KIVEL ütközöm — ezt
-            // csak a mérés adja meg (culprit-lista + stackelés-cél).
-            ? [{ key: 'mt-ci', color: 'yellow', text: '⚠ next: kiesett (next-conflict — a CI rebase-e conflictolt)' }]
+            // DROPPED OUT: the label states this, but NOT who I clash
+            // with — only the measurement gives that (culprit list +
+            // stacking target).
+            ? [{ key: 'mt-ci', color: 'yellow', text: '⚠ next: dropped out (next-conflict — CI\'s rebase conflicted)' }]
             : fast.state === 'blocked'
-            ? [{ key: 'mt-ci', color: 'yellow', text: '⚠ next: kihagyva (next-blocked — workflow-fájlt módosít)' }]
-            // MISSING: még nem futott rebuild ezzel a PR-ral. Nem tudunk semmit —
-            // és ezt kimondjuk, nem hallgatjuk el.
-            : [{ key: 'mt-ci', dimColor: true, text: '· next: még nem épült be (nem futott rebuild ezzel a PR-ral)' }]),
-          // A MAIN-TENGELY NINCS MÉRVE, és ezt KI KELL MONDANI: a `next-conflict`
-          // címke NEM mondja meg, hogy a main-nel ütközöm-e (a #911 mért esete: a
-          // PR a main-nel MERGEABLE volt, a conflict forrása négy queue-belső PR).
-          // Ez az egyetlen tengely, amit SEMMILYEN CI-jelzés nem ad meg.
-          // (wf31/40) A „culpritok" ZSARGON KIVEZETVE. A user kérdése: "Mit jelent a
-          // »main + culpritok«? Mi az hogy culprit?" — jogos: a szó a KÓDBAN
-          // bejáratott (a `queueConflicts` elemei), a UI-ban viszont magyarázat
-          // nélkül állt. A helyére az kerül, amit a mérés VALÓJÁBAN ad: a main-nel
-          // való ütközés ténye, és hogy KIVEL ütközöl a queue-ban.
-          { key: 'mt-hint', dimColor: true, text: clampCells('· main: nem mérve — c: mérés (ütközöm-e a main-nel, és kivel a queue-ban)', innerWidth) },
+            ? [{ key: 'mt-ci', color: 'yellow', text: '⚠ next: skipped (next-blocked — modifies a workflow file)' }]
+            // MISSING: no rebuild has run yet with this PR. We don't know
+            // anything — and we state that, not hide it.
+            : [{ key: 'mt-ci', dimColor: true, text: '· next: not landed yet (no rebuild has run with this PR)' }]),
+          // THE MAIN AXIS IS NOT MEASURED, and this MUST BE STATED: the
+          // `next-conflict` label does NOT say whether I clash with main
+          // (the #911 measured case: the PR WAS mergeable with main, the
+          // conflict came from four intra-queue PRs). This is the ONLY axis
+          // that NO CI signal reports.
+          // (wf31/40) THE "culprits" JARGON REMOVED. The user's question:
+          // "What does »main + culprits« mean? What's a culprit?" —
+          // fair: the word was established IN THE CODE (the elements of
+          // `queueConflicts`), but stood in the UI without explanation. In
+          // its place goes what the measurement ACTUALLY gives: the fact of
+          // clashing with main, and who you clash with in the queue.
+          { key: 'mt-hint', dimColor: true, text: clampCells('· main: not measured — c: measure (do I clash with main, and with whom in queue)', innerWidth) },
         ]),
 
-    // (wf31/73) A FELOLDÁS AJÁNLATA — A `c: mérés` SOR HELYÉN, MÉRÉS UTÁN.
+    // (wf31/73) THE RESOLUTION OFFER — IN THE `c: measure` ROW'S SPOT, AFTER
+    // MEASURING.
     //
-    // A user kérése: "A parancs a status soron csak elemzés után jelenjen meg, és
-    // legyen 'v: resolve', és a conflict parancs helyén jelenjen meg."
+    // The user's request: "The command should only appear on the status row
+    // after analysis, and it should say 'v: resolve', and appear where the
+    // conflict command is."
     //
-    // A HELY EZÉRT UGYANAZ, mint a `mt-hint`-é: a mért sáv alja. Mérés ELŐTT ott a
-    // `c: mérés` áll (nem tudjuk, van-e mit feloldani), mérés UTÁN — ha EGY culprit
-    // van — a `v: resolve`. A kettő sosem látszik egyszerre: az egyik a mérés
-    // hiányát, a másik az eredményét hirdeti.
+    // THE SPOT IS THEREFORE THE SAME as `mt-hint`'s: the bottom of the
+    // measured band. BEFORE measuring, `c: measure` sits there (we don't
+    // know if there's anything to resolve), AFTER measuring — if there's
+    // EXACTLY ONE culprit — `v: resolve`. The two never show at once: one
+    // announces the absence of a measurement, the other its result.
     //
-    // EGY CULPRIT A FELTÉTEL: a feloldás egy BÁZIS ellen megy (a rebase egy célra
-    // mutat), és a `conflictAdvice` több culprit mellett `offerStack: false`-ot ad —
-    // ugyanaz a forrás dönt itt is, tehát a `v` és a stackelés-ajánlat nem csúszhat szét.
+    // ONE CULPRIT IS THE CONDITION: the resolution runs against a BASE (the
+    // rebase targets one), and `conflictAdvice` gives `offerStack: false`
+    // with more than one culprit — the same source decides here too, so `v`
+    // and the stacking suggestion can't drift apart.
     ...(slow.state === 'done' && slow.advice?.offerStack === true
       ? [{
           key: 'mt-resolve',
           color: 'cyan',
-          text: clampCells(`· v: resolve — AI-feloldás a #${slow.advice.stackOn} culprittal (elemzés + a kód a worktree-ben)`, innerWidth),
+          text: clampCells(`· v: resolve — AI resolution vs #${slow.advice.stackOn} culprit (analysis + code in the worktree)`, innerWidth),
         }]
       : []),
 
-    // --- A KÖVETKEZŐ LÉPÉSEK: A PANEL SAJÁT LÁBLÉCE MONDJA, NEM A BODY -------
+    // --- NEXT STEPS: THE PANEL'S OWN FOOTER SAYS IT, NOT THE BODY --------
     //
-    // ITT KORÁBBAN EGY MÁSODIK AKCIÓ-SOR ÁLLT:
-    //   'tovább innen: d: diff-review · r: AI-review · a: approve · m: merge'
+    // A SECOND ACTION ROW USED TO STAND HERE:
+    //   'next from here: d: diff-review · r: AI-review · a: approve · m: merge'
     //
-    // TÖRÖLVE (user-kérés, szó szerint): "a lenyíló panelben két action sor van,
-    // gyakorlatilag ugyanazokkal az opciókkal, ez teljesen felesleges".
+    // REMOVED (user request, verbatim): "the dropdown panel has two action
+    // rows with basically the same options, it's completely pointless".
     //
-    // A MÉRT DUPLIKÁCIÓ: a panel keret-lábléce (core `panelFooter`, INLINE ág)
-    // EGY SORRAL LEJJEBB pontosan ugyanazt a négy kulcsot hirdeti
-    // (`d: diff · r: AI-review · a: approve · m: merge · j/k: sor · Esc: bezárás`),
-    // sőt TÖBBET is: a j/k-t és az Esc-et. A body-sor tehát nem hordozott olyan
-    // információt, ami máshol ne jelenne meg — a törléssel semmi nem veszett el.
+    // THE MEASURED DUPLICATION: the panel frame's footer (core
+    // `panelFooter`, INLINE branch) announces EXACTLY THE SAME four keys ONE
+    // ROW BELOW (`d: diff · r: AI-review · a: approve · m: merge · j/k: row
+    // · Esc: close`), and even MORE: j/k and Esc too. The body row therefore
+    // carried no information that didn't appear elsewhere — deleting it lost
+    // nothing.
     //
-    // MIÉRT A LÁBLÉC A MEGFELELŐ HELY (és nem a body): a lábléc az overlay-keret
-    // EGY forrásból jövő vezérlő-sávja, tehát a kulcs-hirdetés panelenként nem
-    // csúszhat szét (ez volt a keybind-hivatkozások tanult bug-osztálya). A body
-    // a TARTALOM — a kettő összemosása pont azt a kettős forrást hozta létre,
-    // amit a refaktor máshol megszüntetett.
+    // WHY THE FOOTER IS THE RIGHT PLACE (and not the body): the footer is
+    // the overlay frame's control bar coming from ONE source, so the key
+    // announcements can't drift apart panel by panel (this was the learned
+    // bug class for keybinding references). The body is the CONTENT —
+    // mixing the two would recreate the exact dual-source problem the
+    // refactor eliminated elsewhere.
     //
-    // A REFAKTOR EREDMÉNYE ÉL: az `a`/`m`/`r`/`d` a panelen BELÜL is éles (lásd a
-    // panel-ágat a keybind-kezelőben) — csak nem hirdetjük kétszer.
+    // THE REFACTOR'S RESULT STANDS: `a`/`m`/`r`/`d` are ALSO live WITHIN the
+    // panel (see the panel branch in the keybinding handler) — we just don't
+    // announce them twice.
   ]
 }
 
 /**
- * A HIBA-overlay tartalma: a nyers üzenet, CELLÁRA tördelve.
+ * The error overlay's content: the raw message, wrapped IN CELLS.
  *
- * A tördelés a core wrapCells-e (nem az Ink saját tördelése): a keret belső
- * szélességét MI számoljuk, tehát a tartalomnak is ugyanahhoz a mértékhez kell
- * igazodnia, különben a keret szétesik.
+ * The wrap is the core's wrapCells (not Ink's own wrapping): WE compute the
+ * frame's inner width, so the content needs to match the same measure,
+ * otherwise the frame falls apart.
  *
- * A HOSSZ-KORLÁT: egy elhasalt `gh` több száz sort is önthet (pl. egy teljes
- * GraphQL-hibaobjektum). Az overlay ilyenkor kitolná a listát a képernyőről —
- * tehát pont a KONTEXTUST vinné el, amiért az overlay-refaktor készült. Az első
- * sorok a fontosak (ott van a hibakód/ok), a maradékot megszámolva jelezzük, nem
- * némán elhagyva: a user tudja, hogy van még, és hol keresse (a status-sor +
- * a terminál scrollback).
+ * THE LENGTH CAP: a failed `gh` can dump several hundred lines (e.g. a full
+ * GraphQL error object). The overlay would push the list off screen in that
+ * case — taking away exactly the CONTEXT the overlay refactor was built for.
+ * The first lines matter (the error code/reason is there), and we announce
+ * the rest by count, not by silently dropping it: the user knows there's
+ * more, and where to look for it (the status row + the terminal
+ * scrollback).
  */
 const ERROR_BODY_MAX_LINES = 12
 
@@ -944,37 +1058,40 @@ export function errorBody(errorState, innerWidth) {
   return [
     ...shown.map((line, i) => ({ key: `err-${i}`, color: 'red', text: line })),
     ...(hidden > 0
-      ? [{ key: 'err-more', dimColor: true, text: `… és további ${hidden} sor (a teljes szöveg a terminál scrollbackjében)` }]
+      ? [{ key: 'err-more', dimColor: true, text: `… and ${hidden} more lines (the full text is in the terminal scrollback)` }]
       : []),
   ]
 }
 
 /**
- * A SOR-LEÍRÓK → Ink-fa konverzió. EGY helyen, a magasság-vágás UTÁN.
+ * The ROW DESCRIPTOR → Ink tree conversion. In ONE place, AFTER the height
+ * clip.
  *
- * A `key` a leíróból jön, ha van; egyébként pozíció-alapú, DE `line-` prefixszel.
- * MIÉRT PREFIX: ez a panel EGY Box gyerekei közé HÁROM listát terít szét
- * (blokkolók, közös fájlok, culpritok), és puszta index mellett mindhárom a 0-ról
- * indulna — a React "two children with the same key" hibája duplikálhatja vagy
- * ELHAGYHATJA a sorokat. Élő renderben ez már adott négy warningot.
+ * `key` comes from the descriptor if present; otherwise it's position-based,
+ * BUT with a `line-` prefix. WHY THE PREFIX: this panel spreads THREE lists
+ * across the children of ONE Box (blockers, shared files, culprits), and
+ * with bare indices all three would start from 0 — React's "two children
+ * with the same key" error can duplicate or DROP rows. In a live render this
+ * already produced four warnings.
  */
 export function renderLines(lines) {
   return lines.map((l, i) => {
     const key = l.key ?? `line-${i}`
-    // (2) SZEGMENTÁLT SOR: egy soron BELÜL több színnel. A review-cascade-menü
-    // második lépcsője kell ilyet — ott a figyelmeztetés PIROS, a `y`/`esc`
-    // kulcsok viszont dimmeltek, EGY sorban (a user: horizontális menü).
+    // (2) A SEGMENTED ROW: multiple colors WITHIN one row. The
+    // review-cascade menu's second stage needs this — there the warning is
+    // RED, while the `y`/`esc` keys are dimmed, IN ONE row (the user:
+    // a horizontal menu).
     //
-    // MIÉRT AZ INK Text-EGYMÁSBA-ÁGYAZÁSA, ÉS MIÉRT NEM EGY Box row-IRÁNNYAL: a
-    // Box flex-elemként MÉRETET kap, és egy szűk kereten belül a saját tördelését
-    // hozná — pontosan az a keret-szétesés, amit a layout-modul feje kimond. Az
-    // egymásba ágyazott Text viszont TISZTA szöveg-folyam: az Ink a szülő Text
-    // szélességét használja, tehát a mi `displayWidth`-ünkkel mért sor marad a
-    // mérték.
+    // WHY NESTING INK Texts, AND WHY NOT A Box WITH row DIRECTION: a Box
+    // gets SIZED as a flex element, and within a narrow frame it would do
+    // its own wrapping — exactly the frame collapse the layout module's
+    // header rules out. A nested Text, though, is a PURE text flow: Ink uses
+    // the parent Text's width, so the measure stays our own
+    // `displayWidth`-measured row.
     //
-    // A `text` MINDIG ott van a szegmensek mellett (a core `joinSegments`-e
-    // mindkettőt adja, ugyanabból a listából): a szélesség-tesztek és a
-    // frame-assertek AZT mérik, tehát a kettő nem tud szétcsúszni.
+    // `text` is ALWAYS there next to the segments (the core's
+    // `joinSegments` supplies both, from the same list): the width tests and
+    // the frame assertions MEASURE that, so the two can't drift apart.
     if (Array.isArray(l.segments) && l.segments.length > 0) {
       return h(Text, { key }, ...l.segments.map((s, j) =>
         h(Text, { key: `${key}-s${j}`, color: s.color, dimColor: s.dimColor, bold: s.bold }, s.text)))
@@ -988,35 +1105,39 @@ export function renderLines(lines) {
   })
 }
 
-// AZ APPROVE / MERGE MODÁL PROPJAI — EGY forrásból, MODUL-SZINTEN.
+// THE APPROVE / MERGE MODAL PROPS — from ONE source, at MODULE LEVEL.
 //
-// MIÉRT NEM a hívási helyeken inline: mindkét akció KÉT helyről indul (a listáról
-// ÉS a panelen belülről), és a régi kódban a `blockers` kiszámítása a `setConfirm`
-// hívásába volt beágyazva. Ha a panel-ág ezt lemásolná, egy elmaradt
-// `canApproveRow`-ellenőrzés NÉMÁN engedne át egy tiltott approve-ot pont azon az
-// egy úton, amit elfelejtettünk frissíteni — és a UI ugyanúgy nézne ki.
+// WHY NOT INLINE AT THE CALL SITES: both actions start from TWO places (from
+// the list AND from within the panel), and in the old code the `blockers`
+// computation was embedded in the `setConfirm` call. If the panel branch
+// duplicated this, a missed `canApproveRow` check would SILENTLY let a
+// forbidden approve through on exactly the one path we forgot to update —
+// and the UI would look the same.
 //
-// A `row`-t a modál NEM hordozza: azt a PANEL adja (panelToModal megtartja). Egy
-// második `row` a modálban két forrást jelentene ugyanarra a tényre, ami pont az
-// az elcsúszás-osztály, amit a konszolidáció megszüntet.
-// (wf31/14) A BLOKKOLÓK FELSOROLVA, mint a merge-nél. A régi alak EGYETLEN
-// generikus stringet adott ("sajátod / draft / stacked / már eldöntött"), amiből
-// a usernek KI KELLETT TALÁLNIA, melyik ok áll — és meg is kérdezte. A
-// `approveBlockers` a konkrét okot adja; a "már approved" pedig MÁR NEM blokkoló
-// (a második approve engedett — az indoklás a core `approveBlockers` fejénél).
+// The modal does NOT carry `row`: the PANEL supplies that (panelToModal
+// keeps it). A second `row` in the modal would mean two sources for the same
+// fact, which is exactly the drift class the consolidation eliminates.
+// (wf31/14) THE BLOCKERS ARE LISTED, like for merge. The old form gave a
+// SINGLE generic string ("yours / draft / stacked / already decided"), which
+// forced the user to GUESS which reason applied — and they did ask. The
+// `approveBlockers` gives the concrete reason; and "already approved" is NO
+// LONGER a blocker (the second approve is allowed — the rationale is at the
+// head of the core's `approveBlockers`).
 export function approveModalProps(row) {
   return { kind: 'approve', blockers: approveBlockers(row) }
 }
 
 /**
- * (wf31/73) A CONFLICT-FELOLDÁS MEGERŐSÍTŐ MODÁLJA.
+ * (wf31/73) THE CONFLICT-RESOLUTION CONFIRMATION MODAL.
  *
- * BLOKKOLÓ NINCS: a feloldhatóság feltétele (van mérés, van EGY culprit) már a
- * hirdetésnél eldőlt — a body csak akkor kínálja a `v`-t. Egy itteni második
- * ellenőrzés két igazságot csinálna ugyanabból a kérdésből.
+ * NO BLOCKERS: the resolvability condition (a measurement exists, there's
+ * ONE culprit) is already decided at the offer stage — the body only offers
+ * `v` in that case. A second check here would create two truths from the
+ * same question.
  *
- * A `stackOn` a modálba kerül, mert a KÉRDÉS szövege megnevezi a célt: a user a
- * megerősítésnél lássa, MELYIK PR-ral szemben oldunk fel.
+ * `stackOn` goes into the modal because the QUESTION's text names the
+ * target: the user should see, at confirmation, WHICH PR we're resolving
+ * against.
  */
 export function resolveModalProps(row, stackOn) {
   return { kind: 'resolve', blockers: [], stackOn }
@@ -1026,62 +1147,78 @@ export function mergeModalProps(row) {
   return { kind: 'merge', blockers: canMergeRow(row) ? [] : mergeBlockers(row) }
 }
 
-// A MEGERŐSÍTŐ overlay tartalma. A CÍM (heading) NEM itt születik: a core
-// OVERLAY_TITLES-e adja, hogy a lista fölötti keret és a kódbeli állapot-nevek
-// ne tudjanak elcsúszni.
+// The CONFIRMATION overlay's content. The TITLE (heading) is NOT born here:
+// the core's OVERLAY_TITLES supplies it, so the frame above the list and the
+// in-code state names can't drift apart.
 export function confirmBody(confirm, innerWidth = 100, { hasTrace = false, choiceIndex = 0 } = {}) {
   const { kind, row, blockers, summary, paths, pathIndex, costWarning, budget, model } = confirm
-  // A landolási terv (metódus / branch-sors / commit-üzenet). Csak a merge-ágon
-  // kell; a `mergePlan` metódus nélkül null-t ad, és akkor a blockers-lista
-  // amúgy is nem-üres (a mergeMethod-hiány ott van felsorolva).
+  // The landing plan (method / branch fate / commit message). Only needed on
+  // the merge branch; `mergePlan` gives null without a method, and then the
+  // blockers list is non-empty anyway (the missing mergeMethod is listed
+  // there).
   const mergeSummary = kind === 'merge' ? mergePlan(row) : null
-  // A BRANCH-NÉV a megerősítő ekrányon is kell (user-kérés): a döntés PILLANATÁBAN
-  // kell látnia, MELYIK branchre vonatkozik a metódus, mert a "branch törlődik"
-  // sor önmagában nem mondja meg, MELYIK branch. A csonkolás előtagja itt
-  // hosszabb ("branch-név: "), ezért külön mérjük.
-  const BRANCH_PREFIX = 'branch-név: '
+  // The BRANCH NAME is also needed on the confirmation screen (user
+  // request): they need to see, at the MOMENT of the decision, WHICH branch
+  // the method applies to, because the "branch gets deleted" row alone
+  // doesn't say WHICH branch. The truncation prefix here is longer
+  // ("branch name: "), so it's measured separately.
+  const BRANCH_PREFIX = 'branch name: '
   const branchRoom = Math.max(1, innerWidth - displayWidth(BRANCH_PREFIX))
   return [
     ...(blockers.length > 0
       ? [
-          { key: 'cb-h', color: 'red', text: 'Megtagadva — blokkolók:' },
-          // PREFIXÁLT kulcs: ez a lista EGY Box gyerekei közé kerül a többi
-          // keyelt sorral együtt (summary-sorok, 'cw', 'ph', 'p0'…). Puszta
-          // indexszel a 0/1/2 ütközhetne a sibling summary-sorokkal, és a React
-          // ('two children with the same key') duplikálhatja vagy ELHAGYHATJA a
-          // sorokat — élő renderben ezt már egyszer kimértük az info-panelen.
+          { key: 'cb-h', color: 'red', text: 'Denied — blockers:' },
+          // PREFIXED key: this list lands in the children of ONE Box
+          // together with the other keyed rows (summary rows, 'cw', 'ph',
+          // 'p0'…). With a bare index, 0/1/2 could collide with sibling
+          // summary rows, and React's ("two children with the same key")
+          // error can duplicate or DROP rows — this was already measured
+          // once, live, on the info panel.
           ...blockers.map((b, i) => ({ key: `cb-${i}`, color: 'red', text: `  · ${b}` })),
         ]
       : [
-          // Az AI-review ekránya a MÉRT tényeket sorolja: PR-méret, scope, a
-          // kizárt generált fájlok NEVE, a modell és a KÖLTÉS-PLAFON. A
-          // sorrend a summary-ban van eldöntve (tiszta függvény, teszt alatt);
-          // itt csak megjelenítjük. A nagy-PR figyelmeztetés és a "saját
-          // tokenjeid" mondat SZÍNT kap, hogy a szem rájuk essen.
+          // The AI-review screen lists MEASURED facts: PR size, scope, the
+          // NAMES of the excluded generated files, the model and the
+          // SPENDING CEILING. The order is decided in the summary (a pure
+          // function, under test); here we only display it. The large-PR
+          // warning and the "your own tokens" sentence get COLOR, so the eye
+          // lands on them.
           ...(kind === 'ai-review'
             ? summary.lines.map((line, i) => ({
                 key: `sum-${i}`,
-                color: /^FIGYELEM/.test(line) ? 'red' : /saját Claude-token/.test(line) ? 'yellow' : undefined,
-                bold: /^FIGYELEM/.test(line),
+                // THE PATTERN FOLLOWS THE TEXT, AND THAT COUPLING IS THE RISK
+                // HERE: these lines are produced in ai-review-config, and this
+                // is the only place that matches against their wording. The
+                // translation to English broke it once already — the pattern
+                // still read `FIGYELEM` while the producer had switched to
+                // `WARNING`, so the warning silently lost its colour. Nothing
+                // fails when this drifts; it just stops highlighting.
+                //
+                // The second pattern is gone rather than translated: it matched
+                // a "consumes your own tokens" sentence that was deliberately
+                // removed from the summary earlier, so it had been dead before
+                // the translation touched it.
+                color: /^WARNING/.test(line) ? 'red' : undefined,
+                bold: /^WARNING/.test(line),
                 text: line,
               }))
             : []),
-          // A KÖLTSÉG-figyelmeztetés (>30 fájl VAGY >2000 sor) külön, PIROSAN:
-          // ez a legdrágább döntés az ekrányon.
+          // The COST warning (>30 files OR >2000 lines) separate, in RED:
+          // this is the most expensive decision on the screen.
           ...(kind === 'ai-review' && costWarning
             ? [{ key: 'cw', color: 'red', bold: true, text: costWarning }]
             : []),
-          // A REVIEW-ÚT választása. A default az `agent-review` (CI-vel
-          // bit-azonos); a TAB váltja ciklikusan, a SZÁM (1/2) közvetlenül —
-          // a nyíl NEM (user: "zavar, hogy jobbra-balra nyilat kell használnom").
-          // Mindkét út `note`-ja LÁTSZIK, mert a
-          // választás következménye (CI-egyezés vs. eltérő szabályok) nem
-          // magától értetődő.
+          // Choosing the REVIEW PATH. The default is `agent-review` (bit-
+          // identical to CI); TAB cycles it, the NUMBER (1/2) picks directly
+          // — not the arrow (user: "it bugs me that I have to use left/right
+          // arrows"). Both paths' `note` is SHOWN, because the consequence
+          // of the choice (matching CI vs. different rules) isn't obvious.
           ...(kind === 'ai-review' && Array.isArray(paths)
             ? [
-                // Szellőzés a szekció-határon (a user: "össze van nyomva az egész").
+                // Breathing room at the section boundary (the user: "the
+                // whole thing is squished together").
                 { key: 'sp-paths', text: ' ' },
-                { key: 'ph', bold: true, text: 'Review-út (Tab: váltás · 1/2: közvetlen):' },
+                { key: 'ph', bold: true, text: 'Review path (Tab: switch · 1/2: direct):' },
                 ...paths.map((p, i) => ({
                   key: `p${i}`,
                   color: i === pathIndex ? 'green' : undefined,
@@ -1092,80 +1229,88 @@ export function confirmBody(confirm, innerWidth = 100, { hasTrace = false, choic
                 { key: 'pn', dimColor: true, text: `    ${paths[pathIndex]?.note ?? ''}` },
               ]
             : []),
-          // A MERGE-OVERLAY a döntés KÉT ellenőrizhető adatát adja: a metódust és a
-          // branch-nevet (amiből a metódus következik).
+          // The MERGE overlay gives the decision's TWO verifiable facts: the
+          // method, and the branch name (from which the method follows).
           //
-          // (wf31/23) A `branch sorsa` ÉS A `commit-üzenet` SOR KIVEZETVE — a user
-          // kérése: "megintcsak szájbarágós szarság, cut it (mind a két sort)".
+          // (wf31/23) THE "branch fate" AND "commit message" ROWS REMOVED —
+          // the user's request: "again, over-explained nonsense, cut it
+          // (both rows)".
           //
-          // MI VOLT OTT, ÉS MIÉRT NEM HIÁNYZIK:
-          //     branch sorsa: a branch megmarad (ticketes branch — a changelog
-          //                   hivatkozik rá)
-          //     commit-üzenet: a repo beállítása adja (nem írjuk felül)
-          // Az első a MI SZABÁLYUNKAT magyarázta (miért marad a branch), a második
-          // pedig azt, hogy NEM tesszük semmit ("a repo beállítása adja"). Egy
-          // sor, ami arról szól, hogy nem nyúlunk valamihez, nem információ.
+          // WHAT WAS THERE, AND WHY IT'S NOT MISSED:
+          //     branch fate: the branch stays (a ticketed branch — the
+          //                   changelog references it)
+          //     commit message: comes from the repo's settings (we don't
+          //                   override it)
+          // The first explained OUR OWN RULE (why the branch stays), the
+          // second that we DO NOTHING ("comes from the repo's settings"). A
+          // row about not touching something is not information.
           //
-          // AMI MEGMARAD: a `metódus` és a `branch-név`. Ez a kettő a DÖNTÉS
-          // ellenőrzése — a prefix a metódus forrása, tehát a névből látszik, hogy
-          // jó-e a metódus (ez a user eredeti kérése volt a branch-név sorra).
+          // WHAT STAYS: the `method` and the `branch name`. This pair is the
+          // DECISION's verification — the prefix is the method's source, so
+          // the name shows whether the method is right (this was the user's
+          // original request for the branch-name row).
           ...(kind === 'merge'
             ? [
-                { key: 'mm', text: `metódus: ${mergeSummary?.methodLabel ?? row.mergeMethod}` },
+                { key: 'mm', text: `method: ${mergeSummary?.methodLabel ?? row.mergeMethod}` },
                 { key: 'mn', color: 'cyan', text: `${BRANCH_PREFIX}${branchLabel(row.headRefName, branchRoom)}` },
-                // (wf31/22) A FIGYELMEZTETÉSEK — LÁTSZANAK, DE NEM TILTANAK.
+                // (wf31/22) THE WARNINGS — SHOWN, BUT NOT BLOCKING.
                 //
-                // A user döntése: "github UI enged merge-ölni, approve az
-                // egyetlen feltétel. […] Max warningokat hagyhatsz benne." A piros
-                // checkek, a BEHIND és a többi tehát ITT jelenik meg, a döntés
-                // adatai UTÁN, a megerősítő kérdés ELŐTT.
+                // The user's decision: "the github UI allows merging,
+                // approve is the only condition. […] You can leave warnings
+                // in at most." The red checks, BEHIND, and the rest
+                // therefore appear HERE, after the decision's data, BEFORE
+                // the confirmation question.
                 //
-                // SÁRGA, NEM PIROS: a piros a MEGTAGADÁST jelöli (a `denied` ág
-                // fejléce), és ha a warning is piros lenne, a kettő
-                // összemosódna — pont az a szigorúbb-vagyok-a-platformnál
-                // olvasat, amit ez a változás megszüntet.
+                // YELLOW, NOT RED: red marks a DENIAL (the `denied` branch's
+                // heading), and if the warning were red too, the two would
+                // blur together — exactly the "stricter than the platform"
+                // reading this change eliminates.
                 ...mergeWarnings(row).map((w, i) =>
                   ({ key: `mw-${i}`, color: 'yellow', text: `⚠ ${w}` })),
               ]
             : kind === 'ai-review'
             ? [{ key: 'sp-nx', text: ' ' },
-               { key: 'nx-ai', dimColor: true, text: 'a findingokat az AGENT írja a hunk sessionbe — feltöltés csak a te átnézésed után, "f"-fel' }]
+               { key: 'nx-ai', dimColor: true, text: 'the AGENT writes the findings into the hunk session — upload only after your own review, with "f"' }]
             : kind === 'upload'
-            // A KÖVETKEZMÉNY kimondva: ez KÍVÜLRŐL LÁTHATÓ. A darabszámot még
-            // nem tudjuk (a doUpload olvassa ki), de azt igen, hogy a hunk
-            // sessionben MEGMARADT megjegyzések mennek fel — tehát amit a user
-            // már kiszűrt, az nem.
-            ? [{ key: 'nx-up', dimColor: true, text: 'a hunk sessionben MEGMARADT megjegyzések mennek fel EGY review-ként (event=COMMENT, nem approve) — a PR-on láthatóan, a te nevedben' }]
-            : [{ key: 'nx-def', dimColor: true, text: 'attesztációs kommenttel, a meglévő non-interaktív úton' }]),
-          // --- A FRICTION-SÁV + A DÖNTÉS ------------------------------------
+            // The CONSEQUENCE is stated: this is VISIBLE FROM OUTSIDE. We
+            // don't yet know the count (doUpload reads that out), but we do
+            // know that the comments that STAYED in the hunk session go up —
+            // so what the user already filtered out doesn't.
+            ? [{ key: 'nx-up', dimColor: true, text: 'the comments that STAYED in the hunk session go up as ONE review (event=COMMENT, not approve) — visibly on the PR, under your name' }]
+            : [{ key: 'nx-def', dimColor: true, text: 'with an attestation comment, via the existing non-interactive path' }]),
+          // --- THE FRICTION BAND + THE DECISION -----------------------------
           //
-          // A user 1. elve: az approve/merge NEM tiltott review-nyom híján —
-          // csak JELÖLT, és a kérdés KIMONDJA a tétet. A sorok a core TISZTA
-          // függvényéből jönnek (frictionLines), ott van a szín/dim döntés is:
-          // a jelzés NEM sárga (a sárga a KÖLTSÉGNEK és a BLOKKOLÓKNAK van
-          // fenntartva), és a kérdés sem virít — a user kifogása szó szerint az
-          // volt, hogy "a »Megerősíted« feleslegesen virít sárgával, mikor a
-          // doboz aljában is ott van".
+          // The user's 1st principle: approve/merge is NOT blocked by the
+          // lack of a review trace — it's only FLAGGED, and the question
+          // STATES the stakes. The rows come from the core's PURE function
+          // (frictionLines), which also decides the color/dim there: the
+          // flag is NOT yellow (yellow is reserved for COST and BLOCKERS),
+          // and the question doesn't stand out either — the user's complaint
+          // was, verbatim, that "»Confirm« stands out pointlessly in yellow,
+          // when it's already there at the bottom of the box".
           //
-          // A FRICTION CSAK az approve/merge ágon él: a findings-feltöltés és az
-          // AI-review NEM a review MEGTÖRTÉNTÉT állítja (az egyik maga a review,
-          // a másik költés-döntés), tehát ott a nyom-jelzés értelmetlen zaj lenne.
+          // FRICTION only lives on the approve/merge branch: the
+          // findings-upload and the AI-review DON'T state that a review
+          // HAPPENED (one IS the review, the other is a spending decision),
+          // so the trace indicator would be meaningless noise there.
           ...(modalHasChoices(kind)
             ? [
                 { key: 'fr-sep', text: ' ' },
-                // (wf31/73) A `stackOn` ÁTADVA: a resolve-kérdés megnevezi a célt. A
-                // `confirm`-ból jön (a `resolveModalProps` tette bele), tehát a
-                // modál és a kérdés UGYANARRÓL a PR-ról beszél.
+                // (wf31/73) `stackOn` PASSED THROUGH: the resolve question
+                // names the target. It comes from `confirm` (`resolveModalProps`
+                // put it there), so the modal and the question talk about
+                // the SAME PR.
                 ...frictionLines({ kind, hasTrace, stackOn: confirm.stackOn ?? null }).map((l, i) =>
                   ({ key: `fr-${i}`, color: l.color, dimColor: l.dim, text: l.text })),
-                // A NYILAS VÁLASZTÁS (a user 2. elve: modálban a fel/le a
-                // VÁLASZTÁST lépteti, nem a listát). A default a NEM —
-                // fail-closed, lásd a core MODAL_CHOICES fejét. A `y` továbbra is
-                // közvetlen igen: a lista a nyilas ÚT, nem a helyettesítője.
-                // A KÉT VÁLASZTÁS EGY SORBAN: `▸ Nem   Igen`. Egy sorba fűzve,
-                // nem külön Textekben — a magasság-vágás MEGJELENÍTETT sorokat
-                // számol, tehát a leíró egy sor kell legyen, különben a becslés
-                // és a valóság elcsúszik.
+                // THE ARROW-KEY CHOICE (the user's 2nd principle: in a modal,
+                // up/down steps the CHOICE, not the list). The default is NO
+                // — fail-closed, see the core's MODAL_CHOICES head. `y` is
+                // still a direct yes: the list is the arrow-key PATH, not its
+                // replacement.
+                // THE TWO CHOICES ON ONE LINE: `▸ No   Yes`. Joined into one
+                // line, not in separate Texts — the height clip counts
+                // DISPLAYED rows, so the descriptor needs to be one row,
+                // otherwise the estimate and reality drift apart.
                 {
                   key: 'ch',
                   text: MODAL_CHOICES.map((c, i) => `${i === choiceIndex ? '▸' : ' '} ${c.label}`).join('   '),
@@ -1173,42 +1318,49 @@ export function confirmBody(confirm, innerWidth = 100, { hasTrace = false, choic
                 },
               ]
             : [{ key: 'sp-q', text: ' ' },
-               { key: 'q', dimColor: true, text: 'Megerősíted? [y/N]' }]),
-          // A BUDGET-SOR: az overlay LEGALSÓ sora, DIMMELTEN, egy sorban.
+               { key: 'q', dimColor: true, text: 'Confirm? [y/N]' }]),
+          // THE BUDGET ROW: the overlay's BOTTOM-MOST row, DIMMED, on one
+          // line.
           //
-          // MIÉRT ITT ÉS MIÉRT ÍGY (user-döntés): a `--max-budget-usd` a `claude
-          // --help` szerint API-költésre vonatkozik, a user viszont
-          // subscription-limitet fogyaszt — tehát még az sem biztos, hogy vág
-          // egyáltalán. Egy bizonytalan hatású kapcsoló nem érdemel kiemelést
-          // vagy magyarázó bekezdést: "lehet nagyon hangsúlytalan helyen". A
-          // HANGSÚLYOS rész a MÉRET-INFO fölötte (fájlszám + diff-sorok, nagy
-          // PR-on pirosan) — az bizonyítottan hasznos védelem a limitre.
+          // WHY HERE AND WHY LIKE THIS (user decision): `--max-budget-usd`
+          // applies to API spend per `claude --help`, but the user is
+          // burning a subscription limit instead — so it's not even certain
+          // it caps anything. A switch with an uncertain effect doesn't earn
+          // emphasis or an explanatory paragraph: "it can be in a very
+          // unobtrusive place". The EMPHASIZED part is the SIZE INFO above
+          // it (file count + diff lines, red on a large PR) — that's
+          // provably useful protection against the limit.
           //
-          // A SZÖVEG a core budgetLine-jából jön, nem itt épül: a "budget: off"
-          // alak és a fokozat-lista így EGY forrásból, teszt alatt él.
-          // A MODELL-SOR (5b): a KONKRÉT modellnév látszik és váltható (`m`).
-          // A budget-sor FÖLÖTT, mert a modell a NAGYOBB költség-kar: a
-          // budget-flag subscription alatt bizonytalan hatású, a modell-tier
-          // viszont mérten nagyságrendet dönt (a user kerete egy Fable-futásra
-          // ment rá). Dimmelt, mint a budget-sor (a user 3. elve: a vezérlés a
-          // keret alján, a hangsúly a tartalmi méret-infón) — a SZÖVEG a core
-          // modelLine-jából jön (egy forrás, teszt alatt).
+          // The TEXT comes from the core's budgetLine, it isn't built here:
+          // the "budget: off" form and the tier list live from ONE source
+          // this way, under test.
+          // THE MODEL ROW (5b): the CONCRETE model name is shown and
+          // switchable (`m`). ABOVE the budget row, because the model is the
+          // LARGER cost lever: the budget flag has an uncertain effect under
+          // a subscription, while the model tier measurably decides the
+          // order of magnitude (the user's quota once went entirely into one
+          // Fable run). Dimmed, like the budget row (the user's 3rd
+          // principle: controls at the bottom of the frame, emphasis on the
+          // content's size info) — the TEXT comes from the core's modelLine
+          // (one source, under test).
           ...(kind === 'ai-review' && model
             ? [{ key: 'ml', dimColor: true, text: modelLine(model) }]
             : []),
           ...(kind === 'ai-review' && budget
             ? [{ key: 'bl', dimColor: true, text: budgetLine(budget) }]
             : []),
-          // AMI SZÁNDÉKOSAN NINCS ITT: a dwell-kapu MAGYARÁZATA. A user
-          // kifogása szerint a "(a megerősítés röviddel az ekrán megjelenése
-          // után él — a mérés közben leütött y nem számít)" próza
-          // érthetetlen, és nem is ide való: a kapu a NORMÁL használatban
-          // láthatatlan (a szem-kéz kör lassabb, mint a 250 ms), tehát a
-          // fejlesztő 99%-ban olyan mechanizmusról olvasna, ami nem érinti.
-          // Aki tényleg belefut, EGY rövid sort kap a status-sorban ("túl korai
-          // y" — lásd a useInput y-ágát). A mechanizmus INDOKLÁSA kódkommentben
-          // él: itt, a useInput confirm-ágában, és a core confirmAccepts
-          // fejében (typeahead / Ink raw-mode puffer).
+          // WHAT'S DELIBERATELY NOT HERE: an EXPLANATION of the dwell gate.
+          // Per the user's complaint, the prose "(the confirmation is live
+          // shortly after the screen appears — a y pressed during
+          // measurement doesn't count)" is hard to parse, and doesn't belong
+          // here anyway: the gate is INVISIBLE in NORMAL use (the eye-hand
+          // loop is slower than the 250 ms), so 99% of the time the
+          // developer would be reading about a mechanism that doesn't affect
+          // them. Whoever actually hits it gets ONE short row in the status
+          // line ("too early y" — see the useInput y branch). The
+          // mechanism's RATIONALE lives in code comments: here, in the
+          // useInput confirm branch, and at the head of the core's
+          // confirmAccepts (typeahead / Ink raw-mode buffer).
         ]),
   ]
 }
