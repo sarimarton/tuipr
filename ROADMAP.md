@@ -57,13 +57,22 @@ merge — runs without it. Generalizing the measurement is the natural home for
 the richer provider described above, since that is where the measured
 `classification` and `dep` fields come from.
 
-## M2 — Decoupling and English
+## M2 — Decoupling and English ✅
 
-- [ ] Remove workplace-specific vocabulary, allowlists and defaults.
-- [ ] Translate UI strings and comments to English. The prose documentation is
-      already English and carries the design rationale, so this is mechanical
-      rather than interpretive.
+- [x] Workplace-specific vocabulary removed — done before the first public
+      commit, since git history is permanent.
+- [x] **Comments and interface strings translated to English**, across ~17k
+      lines. Each file was checked with `scripts/verify-translation.mjs`, which
+      compares the code's skeleton before and after: comments stripped, string
+      literals replaced by a placeholder, template interpolations kept as code.
+      `node --check` proves syntax; this proves meaning.
 - [ ] Make the diff reviewer **pluggable** (see below).
+
+The translation's real hazard turned out not to be mistranslation but
+**cross-file text coupling**: one file matched a pattern against text produced
+in another, and when the producer became English the match silently stopped
+working. Nothing failed, no test noticed, a warning simply lost its colour.
+Where such a pattern still exists, it now says so at the point of use.
 
 ## M3 — Installable
 
