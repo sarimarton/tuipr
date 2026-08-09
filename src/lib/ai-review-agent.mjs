@@ -1,17 +1,19 @@
-// tuipr — AI-REVIEW-AGENT: az AGENT-VEZÉRELT review végrehajtása.
+// tuipr — AI-REVIEW-AGENT: execution of the AGENT-DRIVEN review.
 //
-// A TUI INDÍT és MÉR, a findingokat maga az agent írja a hunk sessionbe (a
-// hunk-review skill `comment apply` batch-útján). Ami itt lakik: az agent-prompt
-// és -argv, a háttér-processz a watchdoggal, az NDJSON stream-olvasó, és a végső
-// burkoló parse-olása.
+// The TUI STARTS and MEASURES; the agent itself writes the findings into the
+// hunk session (via the hunk-review skill's `comment apply` batch path). What
+// lives here: the agent prompt and argv, the background process with the
+// watchdog, the NDJSON stream reader, and the final envelope parsing.
 //
-// RÉTEGREND: lefelé importál (ai-review-run: a HUMAN-IN-THE-LOOP gate;
-// allowlist, ai-review-config, ai-review-view). Az ai-review-run.mjs SEMMIT nem
-// kér vissza innen — mérve egyirányú, a scripts/check-next-modules.mjs őrzi.
+// LAYERING: imports downward (ai-review-run: the HUMAN-IN-THE-LOOP gate;
+// allowlist, ai-review-config, ai-review-view). ai-review-run.mjs requests
+// NOTHING back from here — measured one-directional, guarded by
+// scripts/check-next-modules.mjs.
 //
-// A GATE UGYANAZ, mint a séma-alapú úton: a claude SIKERE NEM ELÉG. Ha a hunk
-// sessionbe egyetlen komment sem került, a review NEM sikeres — különben a TUI
-// "0 finding, minden rendben"-t jelentene, ami a hazug üres válasz.
+// THE GATE IS THE SAME as on the schema-based path: claude's SUCCESS IS NOT
+// ENOUGH. If not a single comment landed in the hunk session, the review is
+// NOT successful — otherwise the TUI would report "0 findings, all clear",
+// which is the lying empty answer.
 import { aiReviewGate } from './ai-review-run.mjs'
 import { hunkCommentCount } from './hunk.mjs'
 import {
@@ -26,257 +28,278 @@ import { AI_REVIEW_TIMEOUT_MS } from './ai-review-view.mjs'
 import { spawn, spawnSync } from 'node:child_process'
 import process from 'node:process'
 
-// --- AGENT-VEZÉRELT review: a TUI INDÍT és MÉR, a findingokat az agent írja --
+// --- AGENT-DRIVEN review: the TUI STARTS and MEASURES, the agent writes the findings --
 //
-// A FELELŐSSÉG-HATÁR a v1-hez (runAiReview + injectHunkComments) képest
-// megfordult, és ez a fordulat a lényeg:
-//   v1: a claude strukturált findings-JSON-t ADOTT VISSZA, és a TUI írta be őket
-//       a hunk sessionbe (injectHunkComments). A TUI-nak ismernie kellett a
-//       hunk-CLI-t, ÉS a findings-modellt a mi sémánkra kellett laposítani —
-//       a severity/rule_ref/kategória elveszett.
-//   v2 (ez): a review-agent MAGA írja a hunkba (a hunk-review skill
-//       `comment apply` batch-útján), a TUI CSAK indít és VÁR. Az agent a saját,
-//       gazdagabb findings-modelljét használhatja, és a TUI-ból kikerül a
-//       hunk-írás.
+// THE RESPONSIBILITY BOUNDARY compared to v1 (runAiReview + injectHunkComments)
+// has FLIPPED, and that flip is the whole point:
+//   v1: claude RETURNED a structured findings JSON, and the TUI wrote them
+//       into the hunk session (injectHunkComments). The TUI had to know the
+//       hunk CLI, AND had to flatten the findings model onto our own schema —
+//       the severity/rule_ref/category got lost.
+//   v2 (this one): the review agent WRITES INTO the hunk ITSELF (via the
+//       hunk-review skill's `comment apply` batch path), the TUI ONLY starts
+//       and WAITS. The agent can use its own, richer findings model, and the
+//       hunk-writing drops out of the TUI.
 //
-// AMIT EZ A FORDULAT ELVESZ: a burkoló válasza már NEM tartalmazza a
-// findingokat, tehát a `parseAiReviewResult` findings-gate-je (a v1
-// legfontosabb védelme) itt ELVBŐL nem alkalmazható. A helyére a MÉRÉS lép:
-// a hunk komment-darabszáma ELŐTTE és UTÁNA — lásd aiReviewGate. A sorrend
-// ezért kötött: MÉR → INDÍT → ÚJRA MÉR → GATE.
+// WHAT THIS FLIP TAKES AWAY: the envelope's response no longer contains the
+// findings, so `parseAiReviewResult`'s findings gate (v1's MOST IMPORTANT
+// protection) is, IN PRINCIPLE, not applicable here. THE MEASUREMENT takes
+// its place: the hunk comment count BEFORE and AFTER — see aiReviewGate. The
+// order is therefore fixed: MEASURE → START → MEASURE AGAIN → GATE.
 
 /**
- * Az agent-vezérelt review promptja.
+ * The prompt for the agent-driven review.
  *
- * KÉT TILALOM van benne, és mindkettő egy KONKRÉT kárt zár ki:
+ * It contains TWO PROHIBITIONS, and each rules out a CONCRETE harm:
  *
- *  1. NE POSZTOLJ GITHUBRA. A findingoknak a hunk sessionbe kell menniük, mert
- *     ott megy végig rajtuk a fejlesztő (`comment rm`), és a MEGLÉVŐ 'f' út
- *     tölti fel a MEGMARADTAKAT a mi attribúciónkkal. Ha az agent maga posztol,
- *     a human-in-the-loop kapu KIMARAD (a body `verifiedBy` állítása hazug lesz),
- *     és a formátum sem a miénk. A hivatalos code-review plugin épp ezt teszi
- *     (`gh pr comment`), tehát a tilalom nem elméleti.
- *  2. NE TÖRÖLD/SZERKESZD a meglévő kommenteket. A sessionben a FEJLESZTŐ saját
- *     megjegyzései is ott lehetnek; azokhoz a review-agentnek nincs dolga. Ez
- *     nem csak etikett: a gate a darabszám NÖVEKMÉNYÉT méri, tehát egy törlés
- *     elmaszkolná az újonnan írt findingokat (5 törölt + 5 új = 0 növekmény →
- *     hamis "nem írt semmit"), vagy fogyásként fail-closed bukást adna.
+ *  1. DO NOT POST TO GITHUB. The findings must go into the hunk session,
+ *     because that's where the developer goes through them (`comment rm`),
+ *     and the EXISTING 'f' path uploads what REMAINS under our attribution.
+ *     If the agent posts on its own, the human-in-the-loop gate is BYPASSED
+ *     (the body's `verifiedBy` claim becomes a lie), and the format isn't
+ *     ours either. The official code-review plugin does exactly this
+ *     (`gh pr comment`), so the prohibition isn't theoretical.
+ *  2. DO NOT DELETE/EDIT existing comments. The DEVELOPER's own notes may
+ *     also be sitting in the session; the review agent has no business with
+ *     those. This isn't just etiquette: the gate measures the INCREASE in
+ *     count, so a deletion would mask newly written findings (5 deleted + 5
+ *     new = 0 increase → a false "wrote nothing"), or would fail-closed as a
+ *     decrease.
  */
-// A VÁLASZ-JSON instrukció — a DUPLA KÖNYVELÉS (hibrid réteg (a) lába). MINDIG
-// benne van a promptban, session-állapottól függetlenül: ha a session a futás
-// közben hal meg, a findingok a válaszból még megmenthetők.
+// The RESPONSE-JSON instruction — the DOUBLE-ENTRY BOOKKEEPING (leg (a) of
+// the hybrid layer). ALWAYS included in the prompt, regardless of session
+// state: if the session dies mid-run, the findings can still be salvaged
+// from the response.
 const ANSWER_FINDINGS_INSTRUCTION = [
-  'A VÉGSŐ válaszodban a findingokat STRUKTURÁLTAN IS add vissza, egy fenced',
-  'JSON blokkban, PONTOSAN ebben a sémában:',
+  'In your FINAL answer, also return the findings STRUCTURED, in a fenced',
+  'JSON block, in EXACTLY this schema:',
   '',
   '```json',
-  '{"summary":"2-4 mondat: mit néztél át, mi a fő kockázat, mi a verdict",'
-    + '"findings":[{"filePath":"src/a.ts","newLine":5,"summary":"egy mondat","rationale":"opcionális hosszabb indoklás"}]}',
+  '{"summary":"2-4 sentences: what you reviewed, what the main risk is, what the verdict is",'
+    + '"findings":[{"filePath":"src/a.ts","newLine":5,"summary":"one sentence","rationale":"optional longer rationale"}]}',
   '```',
   '',
-  // AZ ÖSSZEGZŐ (wf24/2): a user a hatodik élő futás után jelentette, hogy "nem
-  // találok összegzést sehol" — és igaza volt: a prompt SOSEM kérte, tehát nem
-  // volt MIT megjeleníteni. A findingok listája nem helyettesíti a verdictet.
-  'A felső szintű `summary` KÖTELEZŐ és EMBER-OLVASHATÓ: 2-4 magyar mondatban',
-  'mondd meg, MIT néztél át (fájlok/fókusz), MI a fő kockázat, és MI a verdict.',
-  'Ez a TUI paneljében és a GitHub review-body-ban is megjelenik — ne ismételd',
-  'benne a findingok listáját, hanem összegezz.',
+  // THE SUMMARY (wf24/2): the user reported, after the sixth live run, that
+  // "I can't find a summary anywhere" — and they were right: the prompt
+  // NEVER asked for one, so there was nothing TO display. The findings list
+  // does not substitute for the verdict.
+  'The top-level `summary` is REQUIRED and HUMAN-READABLE: in 2-4 Hungarian sentences,',
+  'say WHAT you reviewed (files/focus), WHAT the main risk is, and WHAT the verdict is.',
+  'This shows up both in the TUI panel and in the GitHub review body — don\'t repeat',
+  'the findings list in it, summarize instead.',
   '',
-  'A `newLine` a post-image, az `oldLine` a pre-image oldal 1-alapú sorszáma —',
-  'findingonként PONTOSAN az egyiket add meg. Ha nem találtál semmit, adj vissza',
-  'ÜRES findings tömböt (a `summary` akkor is kell). Ez a blokk KÖTELEZŐ: e',
-  'nélkül a session megszűnése esetén a findingjaid elvesznek.',
+  'The `newLine` is the post-image, the `oldLine` is the pre-image side\'s 1-based line',
+  'number — give EXACTLY one of them per finding. If you found nothing, return an',
+  'EMPTY findings array (`summary` is still required). This block is REQUIRED: without',
+  'it, if the session dies, your findings are lost.',
 ].join('\n')
 
 function agentReviewPrompt({ pr, repoRoot, reviewPath, sessionAlive = true, headRef = null }) {
   const path = REVIEW_PATHS.find((p) => p.id === reviewPath)
-  // A SZENTESÍTETT fájl-olvasási út. MÉRT hibaosztály: ref-átadás nélkül az
-  // agent a `gh api .../contents | base64 -d`-hez nyúlt — a pipe-ot a
-  // permission-minta elvből nem engedheti, tehát denied lett, a review pedig
-  // csonka. A lokális git show-hoz a TUI által MÁR lefetchelt ref kell.
+  // The SANCTIONED file-reading path. MEASURED error class: without ref
+  // passing, the agent reached for `gh api .../contents | base64 -d` — the
+  // permission pattern can't allow the pipe on principle, so it was denied,
+  // and the review ended up truncated. Local git show needs the ref the TUI
+  // has ALREADY fetched.
   const fileAccessBlock = headRef
     ? [
         '',
-        `FÁJL-TARTALOM OLVASÁSA: a PR head-je lokálisan elérhető — \`git show ${headRef}:<path>\`.`,
-        'A `gh api …/contents` út TILOS (base64 + pipe kellene hozzá, amit a',
-        'permission-réteg nem enged át — a hívásod denied lesz és a review csonkul).',
+        `READING FILE CONTENT: the PR head is available locally — \`git show ${headRef}:<path>\`.`,
+        'The `gh api …/contents` path is FORBIDDEN (it would need base64 + pipe, which',
+        'the permission layer won\'t let through — your call will be denied and the review truncated).',
       ]
     : []
   const hunkBlock = sessionAlive
     ? [
-        'A FINDINGOKAT A HUNK SESSIONBE ÍRD, NEM GITHUBRA.',
-        'Használd a `hunk-review` skillt (a `hunk session comment apply` batch-útját),',
-        `és a \`--repo ${repoRoot}\` sessionbe írj. Minden findinghoz adj meg`,
-        'FÁJL-t és SOR-t (a hunk `--new-line` a post-image, `--old-line` a pre-image',
-        'oldal 1-alapú sorszáma) — pozíció nélküli findingot NE írj be, mert a',
-        'feltöltés fail-closed módon elhasal rajta.',
+        'WRITE THE FINDINGS INTO THE HUNK SESSION, NOT TO GITHUB.',
+        'Use the `hunk-review` skill (the `hunk session comment apply` batch path),',
+        `and write into the \`--repo ${repoRoot}\` session. For every finding give a`,
+        'FILE and a LINE (the hunk `--new-line` is the post-image, `--old-line` is',
+        'the pre-image side\'s 1-based line number) — do NOT write a finding without',
+        'a position, because the upload will fail-closed on it.',
         '',
-        'TILOS a hunk sessionben MÁR MEGLÉVŐ kommentet törölni (`comment rm`) vagy',
-        'átírni: azok között a fejlesztő SAJÁT megjegyzései is ott lehetnek. Csak',
-        'ÚJAKAT adj hozzá.',
+        'It is FORBIDDEN to delete (`comment rm`) or rewrite a comment ALREADY',
+        'PRESENT in the hunk session: the DEVELOPER\'s OWN notes may be among them.',
+        'Only add NEW ones.',
       ]
     : [
-        // NINCS élő session: a hunk-írás kérése a semmibe menne (és tokent
-        // költene rá). A findingok EGYETLEN csatornája ilyenkor a válasz-JSON.
-        'NINCS élő hunk-session erre a repóra: NE hívd a hunk CLI-t, és NE próbálj',
-        'sessiont nyitni. A findingokat KIZÁRÓLAG a lenti válasz-JSON-ban add vissza.',
+        // NO live session: requesting the hunk-write would go nowhere (and
+        // would spend tokens on it). In that case the findings' ONLY channel
+        // is the response JSON.
+        'There is NO live hunk session for this repo: do NOT call the hunk CLI, and',
+        'do NOT try to open a session. Return the findings EXCLUSIVELY in the',
+        'response JSON below.',
       ]
   return [
-    `Futtasd le a \`${path.command}\` review-t a #${pr} pull requestre.`,
+    `Run the \`${path.command}\` review on pull request #${pr}.`,
     '',
-    `A repo gyökere: ${repoRoot}`,
+    `Repo root: ${repoRoot}`,
     '',
     ...hunkBlock,
     ...fileAccessBlock,
     '',
     PERMISSION_REALITY_INSTRUCTION,
     '',
-    'A feltöltésről a fejlesztő dönt, miután a findingokat átnézte.',
+    'The developer decides about the upload, after reviewing the findings.',
     '',
     ANSWER_FINDINGS_INSTRUCTION,
     '',
-    'Valódi defekteket keress: korrektség, hibakezelés, race condition, biztonság,',
-    'elnyelt hiba, hiányzó teszt kritikus úton. Stílus-megjegyzést NE adj.',
-    'Ha tényleg nem találsz semmit, azt EXPLICITEN jelentsd ki a válaszodban —',
-    'a "nem írtam be semmit" némán NEM értelmezhető sikeres review-ként.',
+    'Look for real defects: correctness, error handling, race conditions,',
+    'security, swallowed errors, missing tests on a critical path. Do NOT give',
+    'style comments.',
+    'If you truly find nothing, state that EXPLICITLY in your answer —',
+    'a silent "I wrote nothing" CANNOT be read as a successful review.',
   ].join('\n')
 }
 
 /**
- * Az agent-vezérelt review `claude -p` hívásának alakja. Külön, TISZTA
- * függvény, hogy a flagek és a prompt-tilalmak teszt alatt legyenek.
+ * The shape of the agent-driven review's `claude -p` call. A separate, PURE
+ * function, so the flags and prompt prohibitions are under test.
  *
- * MIÉRT NINCS `--json-schema`: ezen az úton a findingok NEM a burkoló válaszán
- * jönnek vissza (azokat az agent a hunkba írja), tehát egy findings-séma
- * kikényszerítése hazug szerződés lenne — a siker mérése az aiReviewGate.
+ * WHY THERE'S NO `--json-schema`: on this path the findings do NOT come back
+ * in the envelope response (the agent writes them into the hunk instead), so
+ * enforcing a findings schema would be a lying contract — success is
+ * measured by aiReviewGate instead.
  *
- * A `--tools` viszont BŐVEBB, mint a v1-en: az agentnek ÍRNIA kell (a hunk-CLI-t
- * a Bash-en hívja), és a review-skillek agent-fanoutot indítanak, ezért a Task
- * is kell. Ez a szűkítés így is szándékos: a Write/Edit NINCS benne, tehát az
- * agent a REPÓT nem módosíthatja — csak a hunk sessiont.
+ * The `--tools` set, however, is BROADER than on v1: the agent has to WRITE
+ * (it calls the hunk CLI via Bash), and the review skills kick off an
+ * agent fanout, so Task is needed too. This narrowing is still deliberate:
+ * Write/Edit are NOT included, so the agent cannot modify the REPO — only
+ * the hunk session.
  */
 export function agentReviewCommand({ pr, repoRoot, reviewPath, maxBudgetUsd, model, sessionAlive = true, headRef = null }) {
   const args = [
     '-p', agentReviewPrompt({ pr, repoRoot, reviewPath, sessionAlive, headRef }),
-    // A `stream-json` A PROGRESSZ-JELZÉS ELŐFELTÉTELE, nem stílusválasztás.
+    // `stream-json` IS THE PRECONDITION FOR THE PROGRESS SIGNAL, not a style
+    // choice.
     //
-    // MÉRT TÉNY (claude 2.1.220): a `--output-format json` EGY nagy JSON-t ad a
-    // VÉGÉN — 5.88 s wall alatt a stdout KÖZBEN ÜRES volt. Streamként olvasni
-    // tehát nem is volt MIT: a user "5 perc alatt se látok semmi feedbacket"
-    // élménye ezen az úton STRUKTURÁLISAN elkerülhetetlen volt.
+    // MEASURED FACT (claude 2.1.220): `--output-format json` gives ONE big
+    // JSON at the END — stdout was EMPTY for the entire 5.88s wall time in
+    // between. So there was nothing TO read as a stream: the user's "I see
+    // no feedback at all after 5 minutes" experience was STRUCTURALLY
+    // unavoidable on this path.
     //
-    // A `stream-json` VISZONT azonnal ad `{"type":"system","subtype":"init"}`-et
-    // (még a modell-hívás ELŐTT — tehát az "elindult" azonnal jelezhető), majd
-    // per-message `tool_use` blokkokat és `rate_limit_event`-et. A `result` sor
-    // UGYANAZ az objektum, mint a régi teljes kimenet, tehát a burkoló-parse
-    // változatlan marad.
+    // `stream-json`, ON THE OTHER HAND, immediately gives
+    // `{"type":"system","subtype":"init"}` (even BEFORE the model call — so
+    // "started" can be signaled right away), then per-message `tool_use`
+    // blocks and `rate_limit_event`. The `result` line is the SAME object as
+    // the old full output, so the envelope parser stays unchanged.
     //
-    // A `--verbose` KÖTELEZŐ a `stream-json` mellett: a claude egyébként
-    // megtagadja a hívást ("--output-format=stream-json requires --verbose").
+    // `--verbose` IS REQUIRED alongside `stream-json`: otherwise claude
+    // refuses the call ("--output-format=stream-json requires --verbose").
     '--output-format', 'stream-json',
     '--verbose',
-    // A plafon OPCIONÁLIS és defaultban NINCS (lásd a budget-fejezet indoklását:
-    // a flag API-költésre való, a user viszont subscription-limitet fogyaszt).
+    // The ceiling is OPTIONAL and OFF by default (see the budget section's
+    // rationale: the flag is for API spend, but the user consumes a
+    // subscription limit instead).
     ...budgetArgs(maxBudgetUsd),
     '--permission-mode', 'dontAsk',
-    // A `Skill` TOOL NÉLKÜL AZ ÚT JÁRHATATLAN — MÉRVE (#904).
+    // WITHOUT THE `Skill` TOOL THE PATH IS IMPASSABLE — MEASURED (#904).
     //
-    // A prompt épp azt kéri, hogy az agent futtassa a `/agent-review`-t és
-    // használja a `hunk-review` skillt. A régi lista (`Bash,Read,Grep,Glob,Task`)
-    // a `Skill` toolt KIHAGYTA: az éles próbán a claude a `"tools"` mezőben
-    // `["Task","Bash","Glob","Grep","Read"]`-et jelentett, tehát a skill-hívás
-    // ELVBŐL sem volt lehetséges. A #904-es futás naplója ezt megerősítette: az
-    // agent sorra permission-megtagadásokba futott, majd kimondta, hogy "a review
-    // nem futott le".
+    // The prompt asks precisely that the agent run `/agent-review` and use
+    // the `hunk-review` skill. The old list (`Bash,Read,Grep,Glob,Task`)
+    // LEFT OUT the `Skill` tool: in the live trial claude reported
+    // `["Task","Bash","Glob","Grep","Read"]` in the `"tools"` field, so
+    // calling a skill was IMPOSSIBLE in principle. The #904 run's log
+    // confirmed this: the agent ran into permission denials one after
+    // another, then stated outright that "the review did not run".
     '--tools', 'Bash,Read,Grep,Glob,Task,Skill',
-    // A PERMISSION-ALLOWLIST — a `--tools` mellett a MÁSODIK kapu, és a #904-es
-    // futás VALÓDI blokkolója. Indoklás és mérés: `AI_REVIEW_ALLOWED_TOOLS`.
+    // THE PERMISSION ALLOWLIST — alongside `--tools`, the SECOND gate, and
+    // the ACTUAL blocker of the #904 run. Rationale and measurement:
+    // `AI_REVIEW_ALLOWED_TOOLS`.
     ...AI_REVIEW_ALLOWED_TOOLS_ARGS,
-    // Az explicit deny (mutáló gh-utak) — deny > allow, egy jövőbeli
-    // allow-lazítás ellen is tart.
+    // The explicit deny (mutating gh paths) — deny > allow, guards against a
+    // future allow-list loosening too.
     ...AI_REVIEW_DISALLOWED_TOOLS_ARGS,
-    // IZOLÁCIÓ: a user-szintű CLAUDE.md kizárva, a projekt-skillek maradnak
-    // (mérés: AI_REVIEW_SETTING_SOURCES feje).
+    // ISOLATION: the user-level CLAUDE.md excluded, project skills remain
+    // (measurement: the head of AI_REVIEW_SETTING_SOURCES).
     ...AI_REVIEW_SETTING_SOURCES_ARGS,
-    // A MODELL MINDIG EXPLICIT — default: opus (lásd AI_REVIEW_DEFAULT_MODEL).
+    // THE MODEL IS ALWAYS EXPLICIT — default: opus (see AI_REVIEW_DEFAULT_MODEL).
     ...modelArgs(model),
   ]
   return ['claude', args]
 }
 
 /**
- * Az agent-vezérelt review lefuttatása: MÉR → INDÍT → ÚJRA MÉR → GATE.
+ * Running the agent-driven review: MEASURE → START → MEASURE AGAIN → GATE.
  *
- * A LÉPÉSEK SORRENDJE A SZERZŐDÉS:
- *  1. a review-út VALIDÁLÁSA — a claude-hívás ELŐTT, mert egy kizárt út
- *     (`/review` egy-agentes one-shot, `/code-review ultra` cloud-ban fut és a
- *     binary tiltja az agent-indítást) elindítva vagy pénzt éget, vagy némán
- *     rosszabb review-t ad;
- *  2. a `before` MÉRÉS — a claude ELŐTT, mert enélkül a növekmény nem
- *     számolható (a sessionben már lehetnek a fejlesztő saját kommentjei);
- *  3. a `claude -p` indítása;
- *  4. a burkoló fail-closed olvasása (exit-kód, is_error, api_error_status,
- *     subtype, permission_denials) — ez SZŰKSÉGES, de NEM ELÉGSÉGES;
- *  5. az `after` MÉRÉS és az aiReviewGate — EZ a valódi gate.
+ * THE ORDER OF STEPS IS THE CONTRACT:
+ *  1. VALIDATING the review path — BEFORE the claude call, because an
+ *     excluded path (`/review`, a one-agent one-shot; `/code-review ultra`,
+ *     which runs in the cloud and whose binary forbids starting an agent)
+ *     either burns money if launched, or silently gives a worse review;
+ *  2. the `before` MEASUREMENT — before claude, because without it the
+ *     increase can't be computed (the session may already hold the
+ *     developer's own comments);
+ *  3. launching `claude -p`;
+ *  4. fail-closed reading of the envelope (exit code, is_error,
+ *     api_error_status, subtype, permission_denials) — this is NECESSARY,
+ *     but NOT SUFFICIENT;
+ *  5. the `after` MEASUREMENT and aiReviewGate — THIS is the real gate.
  *
- * A 4. és 5. viszonya a lényeg: a `claude -p` MÉRVE adhat exit 0 +
- * `subtype:"success"` + `is_error:false` választ úgy, hogy a review le sem
- * futott. Ezen az úton a burkoló válasza a findingokról SEMMIT nem bizonyít
- * (azokat az agent a hunkba írja), tehát az EGYETLEN megfigyelhető tény a
- * darabszám növekménye. A 4. lépés azért marad, mert a konkrét burkoló-hiba
- * (permission-megtagadás, API-hiba) MAGYARÁZÓBB üzenetet ad, mint a végén
- * bukó gate "nem írt semmit"-je.
+ * The relationship between steps 4 and 5 is the point: `claude -p` can,
+ * MEASURED, give an exit 0 + `subtype:"success"` + `is_error:false`
+ * response even though the review never ran at all. On this path the
+ * envelope's response proves NOTHING about the findings (the agent writes
+ * those into the hunk), so the ONLY observable fact is the increase in
+ * count. Step 4 stays because a concrete envelope-level error (permission
+ * denial, API error) gives a MORE EXPLANATORY message than the gate failing
+ * at the end with a bare "wrote nothing".
  */
-// A `maxBudgetUsd` SZÁNDÉKOSAN nincs defaultolva: a default-OFF szerződés
-// szerint a plafon hiánya a normál eset, egy beégetett `= 3` pedig némán
-// visszahozná a flaget minden hívóra, aki nem ad át semmit.
+// `maxBudgetUsd` DELIBERATELY has no default: under the default-OFF
+// contract, the absence of a ceiling is the normal case, and a baked-in
+// `= 3` would silently bring the flag back for every caller that passes
+// nothing.
 export function runAgentReview({ pr, repoRoot, reviewPath, maxBudgetUsd, model, cwd }) {
-  // 1. A review-út validálása — a claude-hívás ELŐTT (nincs félig-költés).
+  // 1. Validating the review path — BEFORE the claude call (no half-spend).
   const path = REVIEW_PATHS.find((p) => p.id === reviewPath)
   if (!path) {
     const known = REVIEW_PATHS.map((p) => p.id).join(', ')
     throw new Error(
-      `érvénytelen review-út: ${JSON.stringify(reviewPath)} — a claude-hívás EL SEM INDULT. `
-      + `Választható utak: ${known}. `
-      + 'A builtin `/review` (egy-agentes one-shot) és a `/code-review ultra` '
-      + '(cloud-ban fut, $5-25/run, és a binary tiltja az agent-indítást) SZÁNDÉKOSAN kizárt.',
+      `invalid review path: ${JSON.stringify(reviewPath)} — the claude call NEVER STARTED. `
+      + `Available paths: ${known}. `
+      + 'The builtin `/review` (a one-agent one-shot) and `/code-review ultra` '
+      + '(runs in the cloud, $5-25/run, and its binary forbids starting an agent) are DELIBERATELY excluded.',
     )
   }
 
   const cp = claudePath()
   if (!cp) {
     throw new Error(
-      'a `claude` CLI nem érhető el a PATH-on, ezért az AI-review nem futtatható. '
-      + 'Telepítsd a Claude Code CLI-t (vagy tedd a PATH-ra), majd próbáld újra. '
-      + 'Addig a hunk-diffes review (`d`) mindig működik.',
+      'the `claude` CLI is not available on PATH, so the AI review cannot run. '
+      + 'Install the Claude Code CLI (or put it on PATH), then try again. '
+      + 'Until then, the hunk-diff review (`d`) always works.',
     )
   }
 
-  // 2. A `before` MÉRÉS. Ha a hunk-session nem olvasható, itt HANGOSAN bukunk —
-  // a claude EL SEM INDUL. Ok: mérhető kezdőállapot nélkül a gate nem
-  // értelmezhető, és a token-költés után bukni rosszabb, mint előtte.
+  // 2. The `before` MEASUREMENT. If the hunk session can't be read, we fail
+  // LOUDLY right here — claude NEVER STARTS. Reason: without a measurable
+  // starting state the gate can't be interpreted, and failing after the
+  // token spend is worse than failing before it.
   //
-  // A `context: 'review'` a HIBASZÖVEGET választja: ezen az úton a "nincs élő
-  // session" ELŐFELTÉTEL-hiba (a findingok oda kerülnének), tehát az üzenet a
-  // megnyitás útját adja — nem a nyers hunk-stderrt, ami a #904-es
-  // user-jelentésben használhatatlan volt.
+  // `context: 'review'` PICKS THE ERROR TEXT: on this path "no live
+  // session" is a PRECONDITION error (the findings would land there), so
+  // the message gives the path to opening one — not the raw hunk stderr,
+  // which was unusable in the #904 user report.
   const before = hunkCommentCount(repoRoot, { context: 'review' })
 
-  // 3. A hívás.
+  // 3. The call.
   const [cmd, args] = agentReviewCommand({ pr, repoRoot, reviewPath, maxBudgetUsd, model })
   const res = spawnSync(cmd, args, { encoding: 'utf8', cwd, maxBuffer: 64 * 1024 * 1024 })
-  if (res.error) throw new Error(`a claude -p nem indult el: ${res.error.message}`)
+  if (res.error) throw new Error(`claude -p failed to start: ${res.error.message}`)
 
-  // 4. A burkoló fail-closed olvasása — SZŰKSÉGES, de NEM ELÉGSÉGES.
+  // 4. Fail-closed reading of the envelope — NECESSARY, but NOT SUFFICIENT.
   const envelope = parseAgentReviewEnvelope(res.stdout, res.status, res.stderr)
 
-  // 5. Az `after` MÉRÉS és A VALÓDI GATE. Az aiReviewGate dobása MAGYARÁZÓ:
-  // ott derül ki, hogy a "sikeres" claude semmit nem írt, vagy törölt.
+  // 5. The `after` MEASUREMENT and THE REAL GATE. aiReviewGate throwing is
+  // EXPLANATORY: that's where it becomes clear that the "successful" claude
+  // wrote nothing, or deleted something.
   //
-  // A KONTEXTUS ITT MÁS (`after`): a claude MÁR LEFUTOTT, tehát a review-ág
-  // "tokent NEM költöttünk" mondata itt HAZUG lenne. Ez a hibaosztály sem
-  // elméleti: az agent (vagy a hunk daemonja) a futás közben elzárhatja a
-  // sessiont, és akkor a `before` sikere után az `after` bukik el.
+  // THE CONTEXT HERE IS DIFFERENT (`after`): claude has ALREADY RUN, so on
+  // the review branch the sentence "we did NOT spend tokens" would be a LIE
+  // here. This error class isn't theoretical either: the agent (or the hunk
+  // daemon) may close off the session mid-run, and then, after the `before`
+  // succeeds, the `after` fails.
   const after = hunkCommentCount(repoRoot, { context: 'after' })
   const gate = aiReviewGate({ before, after })
 
@@ -294,9 +317,9 @@ export function runAgentReview({ pr, repoRoot, reviewPath, maxBudgetUsd, model, 
 
 
 /**
- * Az NDJSON `stream-json` folyam EGY SORÁNAK olvasása → progressz-jelzés.
+ * Reading ONE LINE of the NDJSON `stream-json` stream → a progress signal.
  *
- * MÉRT SÉMA (claude 2.1.220, `--output-format stream-json --verbose`, éles próba):
+ * MEASURED SCHEMA (claude 2.1.220, `--output-format stream-json --verbose`, live trial):
  *   {"type":"system","subtype":"init","cwd":"…","model":"claude-haiku-4-5",…}
  *   {"type":"system","subtype":"status","status":"requesting",…}
  *   {"type":"stream_event","event":{…},"ttft_ms":1152}
@@ -304,17 +327,19 @@ export function runAgentReview({ pr, repoRoot, reviewPath, maxBudgetUsd, model, 
  *   {"type":"rate_limit_event","rate_limit_info":{"status":"allowed_warning",…}}
  *   {"type":"result","subtype":"success","num_turns":2,…}
  *
- * A `result` sor UGYANAZ a JSON objektum, mint a `--output-format json` teljes
- * kimenete — ezért a `parseAgentReviewEnvelope` VÁLTOZATLANUL használható, csak
- * az utolsó `result` sort kell neki átadni.
+ * The `result` line is the SAME JSON object as the full output of
+ * `--output-format json` — so `parseAgentReviewEnvelope` can be used
+ * UNCHANGED, it just needs to be given the last `result` line.
  *
- * A RATE-LIMIT ESEMÉNY SEM NÉMA: az éles próbán `utilization: 0.78` jött a
- * 7-napos limitre. Ezt a régi kód EGYÁLTALÁN nem látta (a végső envelope-ban
- * nincs benne), és ez a "megszakítva" egyik komoly gyanúsítottja volt.
+ * THE RATE-LIMIT EVENT ISN'T SILENT EITHER: the live trial produced
+ * `utilization: 0.78` for the 7-day limit. The old code didn't see this AT
+ * ALL (it's not in the final envelope), and this was one of the prime
+ * suspects behind the "aborted" mislabeling.
  *
- * `null`-t ad, ha a sor nem jelzés-értékű (nem parse-olható, vagy nem érdekes) —
- * a hívó ilyenkor nem ír semmit. A NÉMA ELNYELÉS itt LEGITIM és szűk: egy
- * csonka NDJSON-sor (a chunk-határon félbevágott JSON) NORMÁLIS, nem hiba.
+ * Returns `null` if the line isn't signal-worthy (unparseable, or
+ * uninteresting) — the caller writes nothing in that case. SILENT SWALLOWING
+ * IS LEGITIMATE and narrow here: a truncated NDJSON line (JSON cut mid-way
+ * at a chunk boundary) is NORMAL, not an error.
  */
 export function parseStreamProgressLine(line) {
   const text = String(line ?? '').trim()
@@ -325,7 +350,7 @@ export function parseStreamProgressLine(line) {
   } catch {
     return null
   }
-  if (ev?.type === 'system' && ev?.subtype === 'init') return { event: 'init', tool: 'elindult' }
+  if (ev?.type === 'system' && ev?.subtype === 'init') return { event: 'init', tool: 'started' }
   if (ev?.type === 'rate_limit_event') {
     const info = ev.rate_limit_info ?? {}
     const pct = Number(info.utilization)
@@ -343,83 +368,92 @@ export function parseStreamProgressLine(line) {
       if (use) return { event: 'tool', tool: String(use.name ?? 'tool') }
     }
   }
-  // A `result` sor a VÉGSŐ envelope — NEM progressz, a hívó a burkoló-parse-nak
-  // adja át. A jelzés viszont hasznos: innen tudjuk, hogy a stream lezárult.
+  // The `result` line is the FINAL envelope — NOT progress, the caller hands
+  // it to the envelope parser. The signal is useful though: from this we
+  // know the stream has closed.
   if (ev?.type === 'result') return { event: 'result', envelopeLine: text }
   return null
 }
 
 /**
- * A HÁTTÉR-REVIEW: a `claude -p` ASZINKRON indítása, a MÁR ÉLŐ hunk-sessionbe.
+ * THE BACKGROUND REVIEW: launching `claude -p` ASYNCHRONOUSLY into the
+ * ALREADY-LIVE hunk session.
  *
- * EZ A PÁRHUZAMOS MODELL. A user kérése: "nem tudunk olyat, hogy első r-re
- * megnyit [a PR] diff-et és háttérprocesszből indít rá review-t?"
+ * THIS IS THE CONCURRENT MODEL. The user's request, verbatim: "can't we have
+ * it so that on the first r it opens [the PR] diff and kicks off a review
+ * from a background process?"
  *
- * MÉRT ELŐFELTÉTEL (hunk 0.17.0, élő TUI mellett, MÁSIK processzből): a
- * hunk-session a TUI futása KÖZBEN is olvasható ÉS írható — a daemon a broker.
- * Mindhárom hívás lefutott egy külön processzből, miközben a hunk TUI futott:
+ * MEASURED PRECONDITION (hunk 0.17.0, alongside a live TUI, from ANOTHER
+ * process): the hunk session is readable AND writable WHILE the TUI is
+ * running — the daemon is the broker. All three calls succeeded from a
+ * separate process while the hunk TUI was running:
  *   hunk session reload  --repo <path> -- diff        → "Reloaded repo …"
  *   hunk session comment apply --repo <path> --stdin  → "Applied 1 live comments"
- *   hunk session comment list  --repo <path> --type agent --json → 1 komment
- * ÉS a beírt komment a FUTÓ TUI-ban MEG IS JELENIK ("Agent note", az `a` =
- * toggle AI notes nézetben) — tehát a user tényleg LÁTJA, ahogy megszületnek.
+ *   hunk session comment list  --repo <path> --type agent --json → 1 comment
+ * AND the written comment ALSO SHOWS UP in the RUNNING TUI ("Agent note",
+ * `a` = toggle in the AI notes view) — so the user really SEES them appear.
  *
- * MIÉRT `spawn` ÉS NEM `spawnSync` (ugyanaz az érv, mint a merge-tree mérőnél):
- * a spawnSync a review teljes idejére MEGFAGYASZTJA az Ink render-loopját — se
- * navigálni, se kilépni nem lehetne, és a "háttérben fut" ígéret hazugság lenne.
+ * WHY `spawn` AND NOT `spawnSync` (same argument as for the merge-tree
+ * meter): spawnSync would FREEZE the Ink render loop for the entire duration
+ * of the review — no navigating, no quitting, and the "runs in the
+ * background" promise would be a lie.
  *
- * A SORREND-GARANCIA A HÍVÓ FELELŐSSÉGE (waitForHunkSession): ez a függvény
- * FELTÉTELEZI, hogy a session MÁR él. Enélkül a claude a semmibe írna, és a
- * token elmenne — épp ezért van a várakozás KÜLÖN, mérhető lépésként.
+ * THE ORDERING GUARANTEE IS THE CALLER'S RESPONSIBILITY (waitForHunkSession):
+ * this function ASSUMES the session is ALREADY alive. Without that, claude
+ * would write into the void, and the token spend would be wasted — which is
+ * exactly why the waiting is a SEPARATE, measurable step.
  *
- * A `spawn` INJEKTÁLHATÓ: a stream-kezelés, a kill és az ENOENT-ág így valódi
- * gyerekfolyamat (és valódi token-költés) nélkül tesztelhető.
+ * `spawn` IS INJECTABLE: the stream handling, the kill, and the ENOENT
+ * branch can thus be tested without a real child process (and without real
+ * token spend).
  *
- * VISSZATÉR: `{ abort, done }` — a `done` egy Promise, ami a burkoló-metaadattal
- * (vagy hibával) settle-el. Az `abort` a KILÉPÉSI ÚT: a TUI-ból kilépő user
- * (`q`) nem hagyhat hátra zombie claude-ot.
+ * RETURNS: `{ abort, done }` — `done` is a Promise that settles with the
+ * envelope metadata (or an error). `abort` is the EXIT PATH: a user quitting
+ * the TUI (`q`) must not leave a zombie claude behind.
  *
- * --- A #904-ES JAVÍTÁSOK, MIND A HÁROM -------------------------------------
+ * --- THE #904 FIXES, ALL THREE ---------------------------------------------
  *
- * 1. AZ ABORT OKA MOSTANTÓL ÁTMEGY (`abort(reason)`), nem csak egy `aborted`
- *    boolean. A régi kódban a `q` (kilépés), az `x` (user-megszakítás) és a
- *    timeout MIND ugyanazt az `{ aborted: true }`-t adta, a hívó pedig
- *    "megszakítva"-t írt — ez a user által jelentett HAZUG jelzés.
+ * 1. THE ABORT REASON NOW PASSES THROUGH (`abort(reason)`), not just an
+ *    `aborted` boolean. In the old code, `q` (quit), `x` (user abort), and
+ *    the timeout ALL produced the same `{ aborted: true }`, and the caller
+ *    wrote "aborted" — this was the LYING signal the user reported.
  *
- * 2. A PROGRESSZ-CALLBACK (`onProgress`) a `stream-json` NDJSON-sorait kapja
- *    SORONKÉNT. Enélkül a status-sor a statikus indulási szövegen áll — ez volt
- *    a "5 perc alatt se látok semmi feedbacket".
+ * 2. THE PROGRESS CALLBACK (`onProgress`) receives the `stream-json` NDJSON
+ *    lines LINE BY LINE. Without it, the status line stays on the static
+ *    starting text — this was the "I see no feedback at all after 5
+ *    minutes".
  *
- * 3. A WATCHDOG (`timeoutMs`) SAJÁT végállapotot ad. A `claude` CLI-nek MÉRVE
- *    nincs `--timeout` flagje, tehát a plafon a mi felelősségünk; enélkül a
- *    review ÓRÁKIG loghatott.
+ * 3. THE WATCHDOG (`timeoutMs`) gives its OWN end state. The `claude` CLI,
+ *    MEASURED, has no `--timeout` flag, so the ceiling is our
+ *    responsibility; without it the review could have run for HOURS.
  */
 export function startAgentReview({
   pr, repoRoot, reviewPath, maxBudgetUsd, model, cwd,
-  // A HIBRID réteg session-állapota: false esetén a prompt a hunk-írás helyett
-  // a válasz-JSON-t kéri KIZÁRÓLAGOS csatornaként (lásd agentReviewPrompt).
+  // The HYBRID layer's session state: when false, the prompt asks for the
+  // response JSON as the EXCLUSIVE channel instead of the hunk write (see
+  // agentReviewPrompt).
   sessionAlive = true,
   spawn: spawnImpl = spawn,
   onProgress,
   timeoutMs = AI_REVIEW_TIMEOUT_MS,
   setTimer = setTimeout,
   clearTimer = clearTimeout, headRef = null }) {
-  // A review-út VALIDÁLÁSA a spawn ELŐTT (nincs félig-költés) — ugyanaz a
-  // szerződés, mint a szinkron úton.
+  // VALIDATING the review path before the spawn (no half-spend) — the same
+  // contract as on the synchronous path.
   const path = REVIEW_PATHS.find((p) => p.id === reviewPath)
   if (!path) {
     const known = REVIEW_PATHS.map((p) => p.id).join(', ')
     throw new Error(
-      `érvénytelen review-út: ${JSON.stringify(reviewPath)} — a claude-hívás EL SEM INDULT. `
-      + `Választható utak: ${known}.`,
+      `invalid review path: ${JSON.stringify(reviewPath)} — the claude call NEVER STARTED. `
+      + `Available paths: ${known}.`,
     )
   }
   const cp = claudePath()
   if (!cp) {
     throw new Error(
-      'a `claude` CLI nem érhető el a PATH-on, ezért az AI-review nem futtatható. '
-      + 'Telepítsd a Claude Code CLI-t (vagy tedd a PATH-ra), majd próbáld újra. '
-      + 'Addig a hunk-diffes review (`d`) mindig működik.',
+      'the `claude` CLI is not available on PATH, so the AI review cannot run. '
+      + 'Install the Claude Code CLI (or put it on PATH), then try again. '
+      + 'Until then, the hunk-diff review (`d`) always works.',
     )
   }
 
@@ -427,48 +461,53 @@ export function startAgentReview({
   const child = spawnImpl(cmd, args, { stdio: ['ignore', 'pipe', 'pipe'], cwd })
   let stdout = ''
   let stderr = ''
-  // AZ ABORT OKA, NEM CSAK A TÉNYE. A régi `aborted` boolean összemosta a
-  // kilépést, a user-megszakítást és a timeoutot — pontosan az a gyűjtőág,
-  // amiből a #904-es hazug "megszakítva" jött.
+  // THE ABORT REASON, NOT JUST THE FACT OF IT. The old `aborted` boolean
+  // lumped together quitting, user abort, and timeout — exactly the
+  // catch-all branch that produced the #904 lying "aborted".
   let abortReason = null
   let settled = false
   let resolveDone
   let rejectDone
   const done = new Promise((res, rej) => { resolveDone = res; rejectDone = rej })
-  // A `done` promise-t MINDIG kezelik (a hívó await-eli), de egy abortált
-  // review-nál a hívó már nem érdeklődik — a `catch`-elés nélkül az
-  // unhandledRejection dőlne el a processzen.
+  // The `done` promise is ALWAYS handled (the caller awaits it), but for an
+  // aborted review the caller no longer cares — without the `catch`, an
+  // unhandledRejection would crash the process.
   const settle = (fn) => {
     if (settled) return
     settled = true
     fn()
   }
 
-  // A WATCHDOG. MIÉRT SAJÁT (és nem CLI-flag): a `claude --help` (2.1.220) MÉRVE
-  // nem ismer se `--timeout`-ot, se `--max-turns`-t. Enélkül a review ÓRÁKIG
-  // loghat némán — a #904-es user esetében pontosan ez a félelme volt reális.
+  // THE WATCHDOG. WHY OUR OWN (and not a CLI flag): `claude --help`
+  // (2.1.220), MEASURED, doesn't know `--timeout` or `--max-turns`. Without
+  // it the review can hang silently for HOURS — for the #904 user this fear
+  // was exactly the real risk.
   let watchdog = null
   const clearWatchdog = () => {
     if (watchdog !== null) { clearTimer(watchdog); watchdog = null }
   }
   if (Number(timeoutMs) > 0) {
     watchdog = setTimer(() => {
-      // A TIMEOUT IS ABORT — de SAJÁT okkal, tehát a hívó SAJÁT üzenetet ad rá.
+      // THE TIMEOUT IS ALSO AN ABORT — but with its OWN reason, so the
+      // caller gives its OWN message for it.
       abortReason = 'timeout'
-      try { child.kill?.() } catch { /* a már kilépett gyerek killje nem hiba */ }
-      // A `close` esemény FEL IS SZABADÍTHATNA, de egy már halott (vagy sosem
-      // induló) gyerek `close`-a elmaradhat — a settle tehát ITT is megtörténik.
-      // A `settle` idempotens, tehát a kettő nem ütközik.
+      try { child.kill?.() } catch { /* killing an already-exited child isn't an error */ }
+      // The `close` event COULD also release this, but the `close` of an
+      // already-dead (or never-started) child may never fire — so the
+      // settle happens HERE too. `settle` is idempotent, so the two don't
+      // collide.
       settle(() => resolveDone({ aborted: true, reason: 'timeout', timeoutMs }))
     }, Number(timeoutMs))
   }
 
-  // A STREAM SORONKÉNTI OLVASÁSA — EZ A PROGRESSZ-JELZÉS MOTORJA.
+  // READING THE STREAM LINE BY LINE — THIS IS THE ENGINE OF THE PROGRESS
+  // SIGNAL.
   //
-  // A PUFFER KÖTELEZŐ: a chunk-határ a JSON-sor KÖZEPÉRE eshet (mérve: a stream
-  // sorai több száz bájtosak, a pipe chunkja 64 KB-os, de a modell-válaszok
-  // darabokban jönnek). Sor-puffer nélkül minden félbevágott sor `null`-t adna,
-  // és a jelzés véletlenszerűen kimaradna.
+  // THE BUFFER IS REQUIRED: a chunk boundary can fall in the MIDDLE of a
+  // JSON line (measured: the stream's lines run several hundred bytes, the
+  // pipe's chunk is 64 KB, but model responses arrive in pieces). Without a
+  // line buffer, every truncated line would yield `null`, and the signal
+  // would randomly go missing.
   let lineBuf = ''
   child.stdout?.setEncoding('utf8')
   child.stdout?.on('data', (c) => {
@@ -476,15 +515,16 @@ export function startAgentReview({
     if (!onProgress) return
     lineBuf += c
     const parts = lineBuf.split('\n')
-    // AZ UTOLSÓ ELEM A CSONKA MARADÉK: az visszakerül a pufferbe.
+    // THE LAST ELEMENT IS THE TRUNCATED REMAINDER: it goes back into the buffer.
     lineBuf = parts.pop() ?? ''
     for (const line of parts) {
       const ev = parseStreamProgressLine(line)
-      // A CALLBACK HIBÁJA NEM VISZI MAGÁVAL A REVIEW-T: a progressz-jelzés
-      // KÉNYELEM, a review a MUNKA. Egy dobó `onProgress` (pl. egy leszerelt
-      // React-komponens setState-je) itt unhandled kivételként vinné az egész
-      // processzt — a TUI-t is.
-      if (ev) { try { onProgress(ev) } catch { /* a jelzés hibája nem review-hiba */ } }
+      // A CALLBACK ERROR DOESN'T TAKE THE REVIEW DOWN WITH IT: the progress
+      // signal is a CONVENIENCE, the review is the WORK. A throwing
+      // `onProgress` (e.g. setState on an unmounted React component) would
+      // otherwise take down the whole process as an unhandled exception —
+      // the TUI too.
+      if (ev) { try { onProgress(ev) } catch { /* the signal's error isn't a review error */ } }
     }
   })
   child.stderr?.setEncoding('utf8')
@@ -494,59 +534,62 @@ export function startAgentReview({
     clearWatchdog()
     settle(() => rejectDone(new Error(
       error?.code === 'ENOENT'
-        ? 'a claude -p nem indítható (ENOENT): a `claude` nincs telepítve, vagy nincs a PATH-on. '
-          + 'Ez NEM review-hiba — a bináris maga hiányzik.'
-        : `a claude -p nem indult el: ${error?.message ?? String(error)}`,
+        ? 'claude -p cannot be started (ENOENT): `claude` is not installed, or not on PATH. '
+          + 'This is NOT a review error — the binary itself is missing.'
+        : `claude -p failed to start: ${error?.message ?? String(error)}`,
     )))
   })
-  // A `signal` A MÁSODIK ARGUMENTUM, ÉS NEM ELDOBHATÓ.
+  // `signal` IS THE SECOND ARGUMENT, AND IT'S NOT DISPOSABLE.
   //
-  // MÉRT TÉNY: ha a processzt KÍVÜLRŐL ölik meg (OOM-killer, `pkill`, a gép
-  // elalvása, a shell SIGHUP-ja), a `close` `code === null`-t ad — a kilépés
-  // SZIGNÁLLAL történt. A SZIGNÁL NEVE viszont a MÁSODIK argumentumban van, és a
-  // régi kód azt EL SEM OLVASTA. Következmény: a végállapot ELVBŐL nem tudhatta
-  // megnevezni az okot, tehát a legjobb esetben is csak annyit mondhatott, hogy
-  // "egy szignál ölte meg" — miközben a `SIGKILL` (OOM / `kill -9`), a `SIGTERM`
-  // (rendezett leállítás) és a `SIGHUP` (a terminál bezárása) HÁROM MÁS teendőt
-  // ír elő a usernek.
+  // MEASURED FACT: if the process is killed FROM THE OUTSIDE (OOM killer,
+  // `pkill`, the machine sleeping, the shell's SIGHUP), `close` gives
+  // `code === null` — the exit happened VIA SIGNAL. The SIGNAL'S NAME,
+  // however, is in the SECOND argument, and the old code DIDN'T EVEN READ
+  // IT. Consequence: the end state couldn't name the cause in principle, so
+  // at best it could only say "a signal killed it" — while `SIGKILL` (OOM /
+  // `kill -9`), `SIGTERM` (orderly shutdown), and `SIGHUP` (the terminal
+  // closing) call for THREE DIFFERENT actions from the user.
   child.on('close', (code, signal) => {
     clearWatchdog()
-    // ABORT UTÁN NEM ÁLLÍTUNK SEMMIT: a megszakított review kimenete nem tény
-    // (ugyanaz az elv, mint a merge-tree mérő abort-ágán, ami BLOCKER volt).
-    // AZ OKOT VISZONT ÁTADJUK: a hívó ebből tudja, MELYIK végállapotot mondja.
+    // WE DON'T ASSERT ANYTHING AFTER AN ABORT: the output of an aborted
+    // review isn't a fact (the same principle as the merge-tree meter's
+    // abort branch, which was a BLOCKER). WE DO PASS ON THE REASON, though:
+    // the caller uses it to know WHICH end state to report.
     if (abortReason !== null) {
       settle(() => resolveDone({ aborted: true, reason: abortReason, timeoutMs }))
       return
     }
-    // A PARSE A `settle` ELŐTT — EZ VOLT A #904-ES GYÖKÉRBUG.
+    // THE PARSE BEFORE THE `settle` — THIS WAS THE #904 ROOT BUG.
     //
-    // A régi kód így szólt:
+    // The old code read like this:
     //     try { settle(() => resolveDone({ envelope: parse(...) })) }
     //     catch (error) { settle(() => rejectDone(error)) }
-    // A `parse` a settle-nek átadott arrow BELSEJÉBEN futott, a `settle` viszont
-    // ELŐBB állította `settled = true`-ra, és CSAK AZUTÁN hívta a függvényt. Egy
-    // dobó parse tehát: (1) a settle már "elhasználta" magát, (2) a throw kifutott
-    // a catch-be, (3) ahol a `settle(() => rejectDone(error))` MÁR NO-OP volt.
-    // Se `resolveDone`, se `rejectDone` nem hívódott meg → a `done` promise
-    // ÖRÖKRE PENDING maradt → a hívó `await handle.done`-ja beragadt → a
-    // `showError` SOSEM futott le → a status-sor örökre az indulási szövegen
-    // állt. EZ a user "5 perc alatt se látok semmi feedbacket sehol" élménye.
+    // The `parse` ran INSIDE the arrow passed to settle, but `settle` set
+    // `settled = true` FIRST, and only THEN called the function. So a
+    // throwing parse meant: (1) settle had already "used itself up", (2) the
+    // throw escaped into the catch, (3) where `settle(() => rejectDone(error))`
+    // was ALREADY a no-op. Neither `resolveDone` nor `rejectDone` was ever
+    // called → the `done` promise stayed PENDING FOREVER → the caller's
+    // `await handle.done` got stuck → `showError` NEVER ran → the status
+    // line stayed on the starting text forever. THIS is the user's "I see
+    // no feedback at all after 5 minutes" experience.
     //
-    // IZOLÁLTAN BIZONYÍTVA: a hibás alakon `Warning: Detected unsettled
-    // top-level await` jött, és a `.then(onOk, onErr)` EGYIK callbackje sem
-    // sült el, MIKÖZBEN a reject-ág "lefutott".
+    // PROVEN IN ISOLATION: the broken shape produced a `Warning: Detected
+    // unsettled top-level await`, and NEITHER callback of `.then(onOk, onErr)`
+    // ever fired, EVEN THOUGH the reject branch had "run".
     //
-    // A JAVÍTÁS: a parse a `try` TÖRZSÉBEN, a `settle` HÍVÁSA ELŐTT fut le.
-    // Minden burkoló-szintű hiba (permission_denials, is_error,
-    // api_error_status, subtype, nem-nulla exit, nem-JSON stdout) így RENDESEN
-    // rejectel.
+    // THE FIX: the parse runs in the BODY of the `try`, BEFORE the `settle`
+    // CALL. Every envelope-level error (permission_denials, is_error,
+    // api_error_status, subtype, non-zero exit, non-JSON stdout) rejects
+    // PROPERLY this way.
     let envelope
     try {
       envelope = parseAgentReviewEnvelope(stdout, code, stderr)
     } catch (error) {
-      // A NYERS TÉNYEK IS ÁTMENNEK: a `failed` végállapot exit-kódot és a stderr
-      // ELSŐ SORÁT mutatja, azok viszont a hibaobjektumból nem kinyerhetők.
-      // A `signal` IS ÁTMEGY: a `failed` végállapot ebből NEVEZI MEG a szignált.
+      // THE RAW FACTS ARE PASSED ON TOO: the `failed` end state shows the
+      // exit code and the FIRST LINE of stderr, but those can't be extracted
+      // from the error object. `signal` IS ALSO PASSED ON: the `failed` end
+      // state NAMES the signal from it.
       settle(() => rejectDone(Object.assign(error, {
         exitCode: code, signal: signal ?? null, stderrText: stderr,
       })))
@@ -558,80 +601,86 @@ export function startAgentReview({
   return {
     done,
     /**
-     * A HÁTTÉR-REVIEW MEGSZAKÍTÁSA — KILL, nem detach.
+     * ABORTING THE BACKGROUND REVIEW — KILL, not detach.
      *
-     * MIÉRT KILL (és miért nem hagyjuk futni): a `claude -p` a hunk sessionbe ÍR.
-     * Egy detachelt review a TUI kilépése UTÁN is írna egy sessionbe, amit már
-     * senki nem néz át — a findingok a következő TUI-indításnál egy MÁS PR
-     * kontextusában bukkannának fel, és a `f` feltöltés a MI attribúciónkkal
-     * küldené fel őket. Ez pontosan a hazug provenance, amit a feature máshol
-     * mindenhol kerül. A zombie pedig külön tilos: a projekt ezt már egyszer
-     * megfizette a merge-tree mérőnél.
+     * WHY KILL (and why we don't let it keep running): `claude -p` WRITES
+     * into the hunk session. A detached review would keep writing into a
+     * session that NOBODY is looking at anymore AFTER the TUI quits — the
+     * findings would surface in a DIFFERENT PR's context on the next TUI
+     * launch, and the `f` upload would send them up under OUR attribution.
+     * That's exactly the lying provenance the feature avoids everywhere
+     * else. A zombie is separately forbidden too: the project already paid
+     * for that once with the merge-tree meter.
      *
-     * A `reason` A JAVÍTÁS LÉNYEGE: a hívó ebből tudja, hogy a user szakította-e
-     * meg (`user`), a TUI bezárása ölte-e meg (`exit`), vagy a watchdog
-     * (`timeout`). A régi, ok nélküli abort MINDHÁRMAT "megszakítva"-nak mondta.
+     * `reason` IS THE POINT OF THE FIX: it tells the caller whether the user
+     * aborted (`user`), the TUI closing killed it (`exit`), or the watchdog
+     * did (`timeout`). The old, reasonless abort called ALL THREE
+     * "aborted".
      */
     abort: (reason = 'user') => {
       abortReason = reason
       clearWatchdog()
-      try { child.kill?.() } catch { /* a már kilépett gyerek killje nem hiba */ }
-      // A SETTLE ITT, AZONNAL — NEM a `close` eseményre várva.
+      try { child.kill?.() } catch { /* killing an already-exited child isn't an error */ }
+      // THE SETTLE HERE, IMMEDIATELY — NOT waiting for the `close` event.
       //
-      // MÉRT BUG (izoláltan reprodukálva): `spawn(stub)` → `kill()` 300 ms-nál →
-      // a `close` esemény 4297 ms-nál. A `kill` a KÖZVETLEN gyereket (`/bin/sh`,
-      // élesben a `claude` burkoló) öli meg, az UNOKÁK viszont tovább élnek és
-      // FOGJÁK a stdout-pipe-ot; a Node `close`-a pedig a stdio EOF-ját is
-      // megvárja. Élesben ez rosszabb: a `claude -p` agent-fanoutot indít (a
-      // prompt Task-toolt kér), tehát az unokák akár sokáig futhatnak.
+      // MEASURED BUG (reproduced in isolation): `spawn(stub)` → `kill()` at
+      // 300 ms → the `close` event at 4297 ms. `kill` kills the DIRECT
+      // child (`/bin/sh`, in production the `claude` wrapper), but the
+      // GRANDCHILDREN keep living and HOLD the stdout pipe open; Node's
+      // `close` waits for the stdio EOF too. In production this is worse:
+      // `claude -p` starts an agent fanout (the prompt asks for the Task
+      // tool), so the grandchildren can keep running for quite a while.
       //
-      // A HATÁS A USERRE, ha a `close`-ra várnánk: az `x` (megszakítás) után a
-      // status-sor SEMMIT nem mond, amíg a claude-fa magától be nem fejezi a
-      // munkát — pontosan a "megnyomtam, és nem történik semmi" élmény, amit ez
-      // a csomag javít. A `kill` továbbra is kimegy (nincs zombie), a UI viszont
-      // nem az unokákra vár.
+      // THE EFFECT ON THE USER if we waited for `close`: after `x` (abort),
+      // the status line says NOTHING until the claude tree finishes on its
+      // own — exactly the "I pressed it and nothing happens" experience
+      // this patch fixes. `kill` still goes out (no zombie), but the UI
+      // doesn't wait on the grandchildren.
       //
-      // A `settle` IDEMPOTENS, tehát a később mégis befutó `close` (ami itt az
-      // `abortReason`-ág) NEM ír felül semmit.
+      // `settle` IS IDEMPOTENT, so the `close` that arrives later anyway
+      // (which here is the `abortReason` branch) OVERWRITES NOTHING.
       settle(() => resolveDone({ aborted: true, reason, timeoutMs }))
     },
   }
 }
 
 /**
- * Az agent-vezérelt út burkoló-parse-olása: a `parseAiReviewResult` findings-
- * gate-je NÉLKÜL (itt a findingok nem a válaszon jönnek), de MINDEN
- * burkoló-szintű hibajelzővel.
+ * Envelope parsing for the agent-driven path: WITHOUT the
+ * `parseAiReviewResult` findings gate (findings don't come back on the
+ * response here), but WITH every envelope-level error flag.
  *
- * A metaadat MÉRT, nem deklarált: a modell a `modelUsage` kulcsából (ez a
- * TÉNYLEGESEN használt modell — egy elavult env-érték hazug attribúciót adna a
- * PR-on), a költés a `total_cost_usd`-ből.
+ * The metadata is MEASURED, not declared: the model comes from the
+ * `modelUsage` key (this is the model ACTUALLY used — a stale env value
+ * would give a lying attribution on the PR), the spend from
+ * `total_cost_usd`.
  */
 export function parseAgentReviewEnvelope(stdout, status, stderr = '') {
   const raw = String(stdout ?? '')
-  const clip = (s) => (s.length > 2000 ? `${s.slice(0, 2000)}…[csonkolva]` : s)
+  const clip = (s) => (s.length > 2000 ? `${s.slice(0, 2000)}…[truncated]` : s)
 
   if (status !== 0) {
     throw new Error(
-      `a claude -p nem-nulla kóddal állt le (exit ${status}).\n`
-      + `stderr: ${String(stderr ?? '').trim() || '(üres)'}\n`
-      + `stdout: ${clip(raw.trim()) || '(üres)'}`,
+      `claude -p exited with a non-zero code (exit ${status}).\n`
+      + `stderr: ${String(stderr ?? '').trim() || '(empty)'}\n`
+      + `stdout: ${clip(raw.trim()) || '(empty)'}`,
     )
   }
 
-  // NDJSON-TOLERÁNS PARSE. A `--output-format stream-json` SOK sort ad, és a
-  // VÉGSŐ `{"type":"result",…}` sor UGYANAZ az objektum, mint a régi
-  // `--output-format json` teljes kimenete (MÉRT: az éles próbán bit-azonos
-  // szerkezet). Ezért nem cseréljük le a parse-olót: az UTOLSÓ `result` sort
-  // adjuk neki.
+  // NDJSON-TOLERANT PARSE. `--output-format stream-json` gives MANY lines,
+  // and the FINAL `{"type":"result",…}` line is the SAME object as the old
+  // full output of `--output-format json` (MEASURED: bit-identical
+  // structure in the live trial). So we don't replace the parser: we just
+  // hand it the LAST `result` line.
   //
-  // A VISSZAFELÉ KOMPATIBILITÁS SZÁNDÉKOS: egyetlen, `\n` nélküli JSON-objektum
-  // (a szinkron `runAgentReview` útjának stubjai, és bármely régi hívó) ugyanígy
-  // átmegy — az az eset a "egy sor, ami result-típusú" speciális alakja.
+  // BACKWARD COMPATIBILITY IS DELIBERATE: a single JSON object with no `\n`
+  // (the stubs on the synchronous `runAgentReview` path, and any old caller)
+  // passes through the same way — that's the special case of "one line that
+  // happens to be result-typed".
   let env
   const lines = raw.split('\n').map((l) => l.trim()).filter((l) => l !== '')
-  // AZ UTOLSÓ `result` SOR, HÁTULRÓL keresve: a stream közben `stream_event` és
-  // `assistant` sorok is jönnek, azok NEM burkolók.
+  // THE LAST `result` LINE, searched from the BACK: `stream_event` and
+  // `assistant` lines also arrive during the stream, and those are NOT
+  // envelopes.
   for (let i = lines.length - 1; i >= 0; i -= 1) {
     let cand
     try {
@@ -639,36 +688,37 @@ export function parseAgentReviewEnvelope(stdout, status, stderr = '') {
     } catch {
       continue
     }
-    // A `type` MEZŐ NÉLKÜLI objektumot is elfogadjuk: a régi (nem-stream)
-    // szerződés nem követelte meg a `type: "result"`-ot, és egy hirtelen
-    // szigorítás a meglévő hívókat NÉMÁN döntené el.
+    // We also accept an object WITHOUT a `type` field: the old (non-stream)
+    // contract didn't require `type: "result"`, and a sudden tightening
+    // would SILENTLY break existing callers.
     if (cand?.type === undefined || cand?.type === 'result') { env = cand; break }
   }
   if (env === undefined) {
     throw new Error(
-      'a claude -p kimenetében NINCS `result` burkoló-sor — a review nem verifikálható.\n'
-      + `nyers kimenet:\n${clip(raw)}`,
+      'the claude -p output has NO `result` envelope line — the review cannot be verified.\n'
+      + `raw output:\n${clip(raw)}`,
     )
   }
 
-  // Négy FÜGGETLEN hibajelző: egyikük sem implikálja a másikat, és egy
-  // modell-szintű kudarc exit 0-t is adhat.
+  // Four INDEPENDENT error flags: none implies the other, and a
+  // model-level failure can still give exit 0.
   if (env.is_error === true) {
-    throw new Error(`a claude -p hibát jelzett (is_error): ${clip(String(env.result ?? '(nincs result)'))}`)
+    throw new Error(`claude -p signaled an error (is_error): ${clip(String(env.result ?? '(no result)'))}`)
   }
   if (env.api_error_status !== null && env.api_error_status !== undefined) {
-    throw new Error(`a claude -p API-hibát jelzett: api_error_status=${env.api_error_status}`)
+    throw new Error(`claude -p signaled an API error: api_error_status=${env.api_error_status}`)
   }
   if (env.subtype !== undefined && env.subtype !== 'success') {
-    throw new Error(`a claude -p nem sikeres subtype-pal állt le: subtype=${env.subtype}`)
+    throw new Error(`claude -p exited with a non-success subtype: subtype=${env.subtype}`)
   }
-  // A DENIAL NEM FATÁLIS ÖNMAGÁBAN — ADAT. A user harmadik elhasalt futása
-  // mutatta meg: 3 denied hívás miatt a TELJES review "ELHASALT"-nak minősült,
-  // pedig az agent findingokat is produkált. Részleges review != nulla review:
-  // a hívó dönt — findingokkal degradált eredmény (caveat), finding nélkül a
-  // régi hangos hiba (a denialMessage szövegével).
+  // A DENIAL ISN'T FATAL ON ITS OWN — IT'S DATA. The user's third failed run
+  // showed this: 3 denied calls caused the WHOLE review to be classified as
+  // "FAILED", even though the agent had produced findings too. A partial
+  // review != a zero review: the caller decides — a degraded result with
+  // findings (a caveat), or, with no findings, the old loud error (with the
+  // denialMessage text).
   const deniedCommands = Array.isArray(env.permission_denials)
-    ? env.permission_denials.map((d) => String(d?.tool_input?.command ?? d?.tool_name ?? '(ismeretlen)'))
+    ? env.permission_denials.map((d) => String(d?.tool_input?.command ?? d?.tool_name ?? '(unknown)'))
     : []
 
   return {

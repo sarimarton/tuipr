@@ -1,11 +1,11 @@
-// tuipr — PROC: process-helper alapréteg.
+// tuipr — PROC: process-helper base layer.
 //
-// ALAPRÉTEG: csak node-builtinokat importál, NULLA projekt-modult. A ciklus-
-// tilalom indoklása a bin/tui-core.mjs fejlécében áll.
+// BASE LAYER: imports only node builtins, ZERO project modules. The reasoning
+// for the cycle ban is in bin/tui-core.mjs's header.
 //
-// Ami itt lakik: a spawn-HIBA (nem az exit-kód!) diagnózisa EGY helyen (az
-// ENOENT-csapda), a repo-gyökér memoizált mérése, a spawnSync-ALAKÚ aszinkron
-// gyerek, és a shell-belépési pont útkonstansai.
+// What lives here: the diagnosis of a spawn ERROR (not the exit code!) in ONE
+// place (the ENOENT trap), the memoized measurement of the repo root, the
+// spawnSync-SHAPED async child, and the path constants for the shell entry point.
 import { spawn, spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
@@ -15,67 +15,71 @@ const SCRIPT_DIR = new URL('..', import.meta.url).pathname
 const NEXT_SH = `${SCRIPT_DIR}tuipr.sh`
 
 /**
- * A CORE-GYÖKÉR: a MODUL saját helyéről (`import.meta.url`) származtatva.
+ * THE CORE ROOT: derived from the MODULE's own location (`import.meta.url`).
  *
- * MIÉRT NEM a process cwd-jéből (ez a lényeg, nem részlet): a TUI-t a user egy
- * MÁSIK repo checkoutjából futtatja (a mobile/web packages alól, ahol a core
- * szimlinkelt vagy vendorolt npm-dependency). A cwd-ben mért SHA tehát a
- * FOGYASZTÓ repójáét mondaná meg — pontosan a rossz választ arra az egyetlen
- * kérdésre, amiért ez a szegmens létezik ("melyik CORE-kód fut?"). A
- * `fetchRepoRoot` szándékosan MÁS fogalom (az a hunk-session repo-gyökere, ami
- * a cwd-é és annak is kell lennie) — a kettő nem cserélhető össze.
+ * WHY NOT from the process's cwd (this is the point, not a detail): the user
+ * runs the TUI from ANOTHER repo's checkout (from under the mobile/web
+ * packages, where core is a symlinked or vendored npm dependency). A SHA
+ * measured from cwd would therefore report the CONSUMER repo's SHA — exactly
+ * the wrong answer to the one question this segment exists for ("which CORE
+ * code is running?"). `fetchRepoRoot` is deliberately a DIFFERENT concept
+ * (the hunk session's repo root, which is and must be cwd's) — the two must
+ * not be swapped.
  */
 const CORE_ROOT = path.resolve(SCRIPT_DIR, '..')
 
 export { CORE_ROOT, NEXT_SH, SCRIPT_DIR }
 
 /**
- * A SPAWN-HIBA (nem az exit-kód!) érdemi szövege — EGY helyen, minden
- * spawnSync-es hívási úthoz.
+ * The substantive text of a SPAWN ERROR (not the exit code!) — in ONE place,
+ * for every spawnSync call site.
  *
- * MÉRT CSAPDA, amiért ez létezik (node v24, spawnSync, PATH=/nonexistent):
+ * THE MEASURED TRAP this exists for (node v24, spawnSync, PATH=/nonexistent):
  *   res.status === null · res.stderr === undefined · res.error.code === 'ENOENT'
- * Tehát a CSAK `res.status !== 0`-t vizsgáló ág "exit null" / "undefined"
- * szöveget ad a usernek, és a valódi okról (a bináris nincs telepítve / nincs a
- * PATH-on) EGY SZÓT SEM. Ez a projekt már megfogott hibaosztálya: a
- * `hunkComments` pont ezért kapott külön ENOENT-ágat ("NEM session-hiba: a
- * bináris maga hiányzik") — ez a helper ugyanazt a diagnózist adja a többi
- * útnak is, hogy ne csak egy helyen legyen igaz.
+ * So a branch checking ONLY `res.status !== 0` gives the user "exit null" /
+ * "undefined" text, and NOT ONE WORD about the real cause (the binary isn't
+ * installed / isn't on PATH). This is a bug class the project has already
+ * been bitten by: `hunkComments` got its own ENOENT branch for exactly this
+ * ("NOT a session error: the binary itself is missing") — this helper gives
+ * the same diagnosis to the other call sites too, so it's not true in only
+ * one place.
  *
- * `null`-t ad, ha NEM spawn-hiba történt (akkor a hívó az exit-kódos ágon megy).
+ * Returns `null` if NO spawn error occurred (then the caller goes down the
+ * exit-code branch).
  */
 export function spawnFailure(res, tool) {
   if (!res?.error) return null
   if (res.error.code === 'ENOENT') {
-    return `a(z) \`${tool}\` nem található (ENOENT): nincs telepítve, vagy nincs a PATH-on. `
-      + 'Ez NEM a művelet hibája — a bináris maga hiányzik.'
+    return `\`${tool}\` was not found (ENOENT): it isn't installed, or isn't on PATH. `
+      + 'This is NOT the operation\'s fault — the binary itself is missing.'
   }
-  return `a(z) \`${tool}\` nem indítható (${res.error.code ?? 'spawn hiba'}): ${res.error.message}`
+  return `\`${tool}\` could not be started (${res.error.code ?? 'spawn error'}): ${res.error.message}`
 }
 
 /**
- * A REPO GYÖKERE — EGY mérés, EGY helyen.
+ * THE REPO ROOT — ONE measurement, ONE place.
  *
- * MIÉRT KELL KÖZPONTOSÍTVA: a gyökér HÁROM úton kellett (a `d` cwd-je, a
- * `hunkComments --repo`-ja, az AI-review `--repo`-ja), és három MÁSOLT
- * `git rev-parse --show-toplevel` hívás állt a kódban. A `d` útján viszont
- * EGYIK SEM volt ott — a hunk a TUI munkakönyvtárában indult. Ez a duplikáció
- * szülte a user-jelentett hibát: a "gyökér" fogalma három helyen élt, és az
- * egyik helyen NEM élt.
+ * WHY IT NEEDS TO BE CENTRALIZED: the root was needed on THREE paths (`d`'s
+ * cwd, `hunkComments`'s `--repo`, the AI review's `--repo`), and three COPIED
+ * `git rev-parse --show-toplevel` calls sat in the code. On `d`'s path,
+ * though, NONE of them were there — the hunk started in the TUI's working
+ * directory. This duplication is what produced the user-reported bug: the
+ * concept of "root" lived in three places, and in one of them it did NOT.
  *
- * A HIBA DOBÓDIK, nem nyeljük el: gyökér nélkül a session-affinitás nem
- * értelmezhető, egy néma üres string pedig `--repo ""`-t adna a hunknak.
+ * THE ERROR IS THROWN, not swallowed: without a root, session affinity is
+ * meaningless, and a silent empty string would hand the hunk `--repo ""`.
  *
- * MEMOIZÁLT (wf24/4). A TUI munkakönyvtára a session ÉLETÉBEN NEM változik (a
- * process cwd-je fix, a hunk-suspend sem mozdítja), tehát az ismételt
- * `git rev-parse` tiszta latencia — és pontosan ez ült a kész review `r`-jének
- * ELSŐ blokkoló hívásaként, a UI-frissítés előtt. Csak a SIKERES mérés
- * cache-elődik: a hibát minden hívás újra megméri (egy tranziens git-hiba nem
- * ragadhat be a session hátralévő részére).
+ * MEMOIZED (wf24/4). The TUI's working directory does NOT change during the
+ * session's LIFE (the process's cwd is fixed, hunk-suspend doesn't move it
+ * either), so a repeated `git rev-parse` is pure latency — and this is
+ * exactly what sat as the FIRST blocking call of the finished review's `r`,
+ * before the UI update. Only the SUCCESSFUL measurement is cached: every call
+ * remeasures on error (a transient git error must not get stuck for the rest
+ * of the session).
  */
 let repoRootCache = null
 
-/** A memoizált gyökér ELDOBÁSA — teszt-horgony (a fixtúrák közti szivárgás ellen). */
+/** DROPPING the memoized root — test anchor (against leakage between fixtures). */
 export function resetRepoRootCache() {
   repoRootCache = null
 }
@@ -84,19 +88,19 @@ export function fetchRepoRoot() {
   if (repoRootCache !== null) return repoRootCache
   const res = spawnSync('git', ['rev-parse', '--show-toplevel'], { encoding: 'utf8' })
   const spawnErr = spawnFailure(res, 'git')
-  if (spawnErr) throw new Error(`a repo gyökere nem határozható meg: ${spawnErr}`)
+  if (spawnErr) throw new Error(`could not determine the repo root: ${spawnErr}`)
   if (res.status !== 0) {
     throw new Error(
-      `a repo gyökere nem határozható meg (git rev-parse, exit ${res.status}): `
-      + `${(res.stderr || '').trim() || '(nincs stderr)'}`,
+      `could not determine the repo root (git rev-parse, exit ${res.status}): `
+      + `${(res.stderr || '').trim() || '(no stderr)'}`,
     )
   }
   const root = (res.stdout || '').trim()
   if (root === '') {
     throw new Error(
-      'a repo gyökere ÜRESEN jött vissza a git-től. A hunk-session repo-szintű, '
-      + 'tehát gyökér nélkül nem azonosítható — a `--repo ""` hívás némán MÁS '
-      + 'sessiont (vagy semmit) találna.',
+      'the repo root came back EMPTY from git. The hunk session is repo-scoped, '
+      + 'so it cannot be identified without a root — a `--repo ""` call would '
+      + 'silently find SOME OTHER session (or none).',
     )
   }
   repoRootCache = root
@@ -104,15 +108,16 @@ export function fetchRepoRoot() {
 }
 
 /**
- * spawnSync-ALAKÚ eredmény ({ status, stdout, stderr, error }) ASZINKRON
- * gyerekből — a szinkron fetch-ek parse-logikája VÁLTOZTATÁS NÉLKÜL ráhúzható.
+ * A spawnSync-SHAPED result ({ status, stdout, stderr, error }) from an
+ * ASYNC child — the sync fetches' parse logic can be reused UNCHANGED.
  *
- * MIÉRT KELL (a user 5. futásának 2. lelete): a hunk-nézet zárása utáni puha
- * reload spawnSync-ként futott a runExclusive alatt, és a MÉRT post-q szakasz
- * (queue --json ~1.9 s + rev-parse + gh pr list ~0.55 s) alatt az app süket
- * volt ("pár másodperces dolgozom"). Az aszinkron gyerek az event loopot
- * szabadon hagyja. SOSEM reject-el: a hibát a spawnSync-alak hordozza (error /
- * nem-nulla status), a döntés a parse-oló hívóé — pontosan mint a szinkron úton.
+ * WHY THIS IS NEEDED (the user's 5th run, 2nd finding): the soft reload after
+ * closing the hunk view ran as spawnSync under runExclusive, and during the
+ * MEASURED post-q phase (queue --json ~1.9 s + rev-parse + gh pr list ~0.55 s)
+ * the app was deaf ("working for a few seconds"). The async child leaves the
+ * event loop free. NEVER rejects: the error is carried by the spawnSync
+ * shape (error / non-zero status), the decision belongs to the parsing
+ * caller — exactly like on the sync path.
  */
 export function spawnCollect(cmd, args) {
   return new Promise((resolve) => {
@@ -129,44 +134,47 @@ export function spawnCollect(cmd, args) {
     child.stdout.on('data', (d) => { stdout += d })
     child.stderr.setEncoding('utf8')
     child.stderr.on('data', (d) => { stderr += d })
-    // Az 'error' után 'close' is jöhet — a Promise az ELSŐ resolve-ot tartja,
-    // tehát a kettős jelzés nem ártalmas.
+    // 'close' can also fire after 'error' — the Promise keeps the FIRST
+    // resolve, so the double signal is harmless.
     child.on('error', (error) => resolve({ status: null, stdout, stderr, error }))
     child.on('close', (code) => resolve({ status: code, stdout, stderr }))
   })
 }
 
-// --- A TRUNK NEVE: melyik branch ellen mér a tooling ------------------------
+// --- THE TRUNK'S NAME: which branch the tooling measures against ------------
 //
-// (dev-trunk átállás) A fogyasztó repók trunkja nem szükségképpen `main` többé:
-// az app repók a dev-trunk modellre állnak át, ahol a PR-ok célpontja és a
-// landability-mérés alapja a `dev`. A név EGY FORRÁSBÓL oldódik fel, a bash
-// oldallal (bin/tuipr.sh `MAIN=`) BÁJTRA azonos rangsorban:
-//   1) `NEXT_WORK_MAIN` env — kézi felülírás (a bash oldal ezt már ismerte);
-//   2) a FOGYASZTÓ repo package.json-jának `tuipr.trunk` mezője — ez a
-//      repóba COMMITOLT deklaráció, tehát az átállás nem függ senki lokál
-//      env-jétől;
-//   3) `'main'` — a mai világ, változatlan viselkedés.
+// (dev-trunk migration) A consumer repo's trunk is no longer necessarily
+// `main`: app repos are moving to the dev-trunk model, where a PR's target
+// and the basis for landability measurement is `dev`. The name resolves from
+// ONE SOURCE, in a ranking BYTE-IDENTICAL to the bash side (bin/tuipr.sh
+// `MAIN=`):
+//   1) `NEXT_WORK_MAIN` env — manual override (the bash side already knew this);
+//   2) the CONSUMER repo's package.json's `tuipr.trunk` field — this is a
+//      declaration COMMITTED into the repo, so the migration doesn't depend
+//      on anyone's local env;
+//   3) `'main'` — today's world, unchanged behavior.
 //
-// FAIL-SOFT MINDEN ÁGON, és ez itt HELYES (nem lazaság): a hiányzó/olvashatatlan
-// package.json pontosan a mai (átállás előtti) repókat írja le — ott a 'main' a
-// helyes válasz. PR-KONTEXTUSBAN TOVÁBBRA IS a `baseRefName` az igazság
-// (fetchPrRefs) — ez a resolver a REPO-SZINTŰ kérdésekhez való (cache-horgony,
-// staleness-szignatúra), ahol nincs PR, ami megmondaná.
+// FAIL-SOFT ON EVERY BRANCH, and this is CORRECT here (not laxness): a
+// missing/unreadable package.json describes exactly today's (pre-migration)
+// repos — there 'main' is the correct answer. IN PR CONTEXT `baseRefName`
+// REMAINS the source of truth (fetchPrRefs) — this resolver is for
+// REPO-LEVEL questions (cache anchor, staleness signature), where there's no
+// PR to say so.
 let trunkBranchCache = null
 
-/** A memoizált trunk-név ELDOBÁSA — teszt-horgony (fixtúrák közti szivárgás ellen). */
+/** DROPPING the memoized trunk name — test anchor (against leakage between fixtures). */
 export function resetTrunkBranchCache() {
   trunkBranchCache = null
 }
 
 /**
- * A trunk branch neve a FOGYASZTÓ repóban. Sosem dob, sosem üres.
+ * The trunk branch's name in the CONSUMER repo. Never throws, never empty.
  *
  * @param {object} [opts]
- * @param {string} [opts.root] a repo gyökere — CSAK teszt-injekcióra; élesben a
- *   memoizált `fetchRepoRoot()` a forrás. Injektált gyökérrel NINCS memoizálás
- *   (a cache a valódi repo válaszát őrzi, nem a fixtúráét).
+ * @param {string} [opts.root] the repo root — ONLY for test injection; in
+ *   production the memoized `fetchRepoRoot()` is the source. An injected root
+ *   gets NO memoization (the cache holds the real repo's answer, not the
+ *   fixture's).
  */
 export function trunkBranch({ root } = {}) {
   const injected = root !== undefined
@@ -179,7 +187,7 @@ export function trunkBranch({ root } = {}) {
       const pkg = JSON.parse(fs.readFileSync(path.join(repoRoot, 'package.json'), 'utf8'))
       const declared = typeof pkg?.tuipr?.trunk === 'string' ? pkg.tuipr.trunk.trim() : ''
       if (declared !== '') return declared
-    } catch { /* lásd a fail-soft indoklást a fejlécben */ }
+    } catch { /* see the fail-soft reasoning in the header */ }
     return 'main'
   }
   const value = resolve()
@@ -187,105 +195,108 @@ export function trunkBranch({ root } = {}) {
   return value
 }
 
-// --- A trunk (origin/<main|dev>) SHA: git-plumbing a PROCESS-rétegen --------
+// --- The trunk's (origin/<main|dev>) SHA: git plumbing on the PROCESS layer --
 //
-// MIÉRT ITT: ez a mérés-cache invalidálási horgonyának másik fele, tehát
-// FOGYASZTÓJA a poll (fetchStalenessProbe) ÉS a queue-fetch réteg is. Ha a
-// queue-fetch modulban lakna, a poll FELFELÉ importálna — pont az a ciklus-
-// veszély, amit a rétegrend kizár. Függősége csak spawnSync/spawnCollect,
-// tehát a proc-réteg a természetes helye.
+// WHY HERE: this is the other half of the measurement cache's invalidation
+// anchor, so its CONSUMERS are the poll (fetchStalenessProbe) AND the
+// queue-fetch layer too. If it lived in the queue-fetch module, the poll
+// would import UPWARD — exactly the cycle risk the layering rules out. Its
+// only dependency is spawnSync/spawnCollect, so the proc layer is its
+// natural home.
 /**
- * A trunk (`origin/<trunkBranch()>`) SHA — a mérés-cache INVALIDÁLÁSI
- * HORGONYÁNAK másik fele. A név történelmi: a "main" itt a TRUNK szerepét
- * jelöli, aminek a neve a dev-trunk átállás után repónként `dev` is lehet
- * (lásd a trunkBranch fejlécét) — az átnevezés a 175 nevet címző fogyasztói
- * szerződés (barrel/entry/tesztek) fölösleges churnje lenne.
+ * The trunk's (`origin/<trunkBranch()>`) SHA — the other half of the
+ * measurement cache's INVALIDATION ANCHOR. The name is historical: "main"
+ * here denotes the role of the TRUNK, whose name can be `dev` per repo after
+ * the dev-trunk migration (see trunkBranch's header) — renaming it would be
+ * pointless churn across the 175-name consumer contract (barrel/entry/tests).
  *
- * EGYSZER fut REBETÖLTÉSENKÉNT, nem soronként: a user 4. pontja kimondja, hogy a
- * jelző nem lassíthatja a listát. Egy `git rev-parse` lokális, de PR-onként
- * meghívva 20 sornál 20 processz lenne MINDEN renderben.
+ * Runs ONCE PER RELOAD, not per row: the user's 4th point states that the
+ * indicator must not slow the list down. A `git rev-parse` is local, but
+ * called per PR it would be 20 processes at 20 rows, EVERY render.
  *
- * MIÉRT NEM DOB: a horgony fél része hiányozhat (nincs remote-ref, friss klón), és
- * ez NEM ok a TUI megbukására — a `null` fail-closed módon `unknown` horgonyt ad
- * (lásd cacheAnchor), tehát semmi nem lesz "friss", csak újramérünk. A NÉMA ELNYELÉS
- * viszont itt sem opció más irányban: egy HAMIS SHA (pl. üres string
- * "sikerként" elfogadva) két KÜLÖNBÖZŐ trunk-állapotot azonosnak mutatna, és a
- * cache elavult diagnózist adna késznek. Ezért az exit-statust ÉS az ENOENT-et
- * is ellenőrizzük, és csak a nem-üres kimenetet fogadjuk el.
+ * WHY IT DOESN'T THROW: half of the anchor may be missing (no remote ref, a
+ * fresh clone), and that's NOT a reason for the TUI to fail — `null`
+ * fail-closed gives an `unknown` anchor (see cacheAnchor), so nothing will be
+ * "fresh", we just remeasure. SILENT SWALLOWING isn't an option in the other
+ * direction either: a FALSE SHA (e.g. an empty string accepted as "success")
+ * would show two DIFFERENT trunk states as identical, and the cache would
+ * present a stale diagnosis as done. So we check both the exit status AND
+ * ENOENT, and only accept non-empty output.
  */
 export function fetchMainSha(remote = 'origin', branch = trunkBranch()) {
   return parseMainShaResult(spawnSync('git', ['rev-parse', `${remote}/${branch}`], { encoding: 'utf8' }))
 }
 
-/** A main-SHA EGYETLEN parse-olója — a szinkron és az aszinkron út közös magja. */
+/** The main-SHA's SINGLE parser — the shared core of the sync and async paths. */
 function parseMainShaResult(res) {
-  // ENOENT (nincs git) és bármely más spawn-hiba: nincs SHA. A `spawnFailure`
-  // ugyanazt a diagnózist adja, mint a többi úton — csak itt nem dobjuk, hanem
-  // null-lal jelezzük a "nem tudható" horgonyt.
+  // ENOENT (no git) and any other spawn error: no SHA. `spawnFailure` gives
+  // the same diagnosis as on the other paths — just here we don't throw, we
+  // signal the "unknowable" anchor with null instead.
   if (res.error) return null
   if (res.status !== 0) return null
   const sha = (res.stdout || '').trim()
   return sha === '' ? null : sha
 }
 
-/** A fetchMainSha ASZINKRON párja — ugyanaz a null-kontraktus, szabad event looppal. */
+/** fetchMainSha's ASYNC counterpart — the same null contract, with a free event loop. */
 export async function fetchMainShaAsync(remote = 'origin', branch = trunkBranch()) {
   return parseMainShaResult(await spawnCollect('git', ['rev-parse', `${remote}/${branch}`]))
 }
 
-// --- A BETÖLTÖTT CORE AZONOSÍTÓJA (1a) -------------------------------------
+// --- THE LOADED CORE'S IDENTIFIER (1a) --------------------------------------
 //
-// A USER MÉRT KÖLTSÉGE, ami miatt ez létezik: "MA TÖBBSZÖR nem tudta
-// megállapítani, hogy friss kódot futtat-e, és ez sok idejébe került". A TUI
-// négy különböző úton indulhat (élő checkout, git worktree, szimlinkelt
-// workspace-package, vendorolt npm-dependency), és a képernyőn eddig SEMMI nem
-// mondta meg, MELYIKET futja. A fejléc-időbélyeg csak azt mondja, mikor
-// töltöttük a QUEUE-t — nem azt, hogy melyik KÓD tölti.
+// THE USER'S MEASURED COST, which is why this exists: "TODAY I repeatedly
+// couldn't tell whether I was running fresh code, and it cost me a lot of
+// time". The TUI can start from four different paths (live checkout, git
+// worktree, symlinked workspace package, vendored npm dependency), and
+// nothing on screen so far said WHICH one it's running. The header timestamp
+// only says when we loaded the QUEUE — not which CODE loaded it.
 //
-// HÁROM FORRÁS, RANGSORBAN. A rangsor nem önkényes: a PONTOSABB azonosító
-// nyer, mert a kérdés az, hogy "ez-e a most pusholt commit".
-//   1) `git -C <coreRoot> rev-parse --short HEAD` — a fejlesztői út. Ez az
-//      EGYETLEN, ami commit-pontos.
-//   2) a `.source-sha` első 7 karaktere — a vendorolt út, ha a szinkronizáló
-//      lerakta a forrás-commitot. Szintén commit-pontos, csak nem élő.
-//   3) a `package.json` verziója — az utolsó mentsvár. NEM commit-pontos (egy
-//      verzió sok commitot fed), de a semminél informatívabb.
+// THREE SOURCES, RANKED. The ranking isn't arbitrary: the MORE PRECISE
+// identifier wins, because the question is "is this the commit just pushed".
+//   1) `git -C <coreRoot> rev-parse --short HEAD` — the developer path. This
+//      is the ONLY one that's commit-exact.
+//   2) the first 7 characters of `.source-sha` — the vendored path, if the
+//      sync tool laid down the source commit. Also commit-exact, just not live.
+//   3) `package.json`'s version — the last resort. NOT commit-exact (one
+//      version covers many commits), but more informative than nothing.
 //
-// NÉGYSZERESEN FAIL-SOFT, és ez SZERZŐDÉS, nem lazaság: ez egy KOZMETIKAI
-// fejléc-szegmens. Egy dobás (nem-git könyvtár, olvashatatlan fájl, romlott
-// JSON) a TELJES TUI-t megölné — az pedig végtelenül drágább, mint a hiányzó
-// SHA. Ezért minden ág `null`-ra fut, és a hívó ELHAGYJA a szegmenst.
+// FOURFOLD FAIL-SOFT, and this is a CONTRACT, not laxness: this is a
+// COSMETIC header segment. A throw (non-git directory, unreadable file,
+// corrupt JSON) would kill the WHOLE TUI — which is infinitely more
+// expensive than a missing SHA. So every branch resolves to `null`, and the
+// caller OMITS the segment.
 //
-// MIÉRT NEM ÍRUNK "unknown"-t (a task explicit kikötése): a "core unknown" azt
-// a képet adja, hogy a program tudni AKARTA és elhasalt — a user pedig épp
-// azért néz a fejlécre, hogy BIZTOS információt kapjon. A hiányzó szegmens
-// néma, a hazug szegmens költséges.
+// WHY WE DON'T WRITE "unknown" (the task's explicit stipulation): "core
+// unknown" gives the impression that the program WANTED to know and failed —
+// and the user is looking at the header for exactly the opposite: to get
+// RELIABLE information. A missing segment is silent; a lying segment is costly.
 
-/** A rövid SHA hossza — a git `--short` default-jával egyezően. */
+/** The short SHA's length — matching git's `--short` default. */
 const SHORT_SHA_LEN = 7
 
 let coreShaCache
 let coreShaCached = false
 
-/** A memoizált core-SHA ELDOBÁSA — teszt-horgony (a fixtúrák közti szivárgás ellen). */
+/** DROPPING the memoized core SHA — test anchor (against leakage between fixtures). */
 export function resetCoreShaCache() {
   coreShaCache = undefined
   coreShaCached = false
 }
 
-/** A git-út: rövid HEAD-SHA a core gyökeréből. `null`, ha nem git (vagy nincs git). */
+/** The git path: short HEAD SHA from the core root. `null` if not git (or no git). */
 function coreShaFromGit(coreRoot) {
-  // A `--short` a git default-hosszát adja (7+, ütközésnél több) — nem mi
-  // csonkoljuk, mert a git tudja, mennyi kell az EGYEDISÉGHEZ ebben a repóban.
+  // `--short` gives git's default length (7+, more on collision) — we don't
+  // truncate it, because git knows how much is needed for UNIQUENESS in this repo.
   const res = spawnSync('git', ['-C', coreRoot, 'rev-parse', '--short', 'HEAD'], { encoding: 'utf8' })
-  // ENOENT (nincs git) és minden más spawn-hiba: nincs SHA ezen az úton.
+  // ENOENT (no git) and every other spawn error: no SHA on this path.
   if (res.error) return null
   if (res.status !== 0) return null
   const sha = (res.stdout || '').trim()
   return sha === '' ? null : sha
 }
 
-/** A vendorolt út: a `.source-sha` első 7 karaktere. `null`, ha nincs/olvashatatlan. */
+/** The vendored path: the first 7 characters of `.source-sha`. `null` if missing/unreadable. */
 function coreShaFromSourceFile(coreRoot) {
   try {
     const raw = fs.readFileSync(path.join(coreRoot, '.source-sha'), 'utf8').trim()
@@ -293,38 +304,38 @@ function coreShaFromSourceFile(coreRoot) {
     const head = raw.slice(0, SHORT_SHA_LEN)
     return head === '' ? null : head
   } catch {
-    // NINCS-FÁJL és OLVASHATATLAN-FÁJL ugyanaz a válasz: nincs SHA ezen az úton.
-    // A kettő szétválasztása itt semmit nem adna (a user nem tud mit tenni vele),
-    // és egy dobás a fejléc miatt vinné el a TUI-t.
+    // NO-FILE and UNREADABLE-FILE get the same answer: no SHA on this path.
+    // Separating the two would give nothing here (the user has nothing to do
+    // with it), and a throw would take the TUI down over the header.
     return null
   }
 }
 
-/** A vendorolt út utolsó mentsvára: a `package.json` verziója. */
+/** The vendored path's last resort: `package.json`'s version. */
 function coreShaFromPackageVersion(coreRoot) {
   try {
     const pkg = JSON.parse(fs.readFileSync(path.join(coreRoot, 'package.json'), 'utf8'))
     const v = pkg?.version
     return typeof v === 'string' && v.trim() !== '' ? v.trim() : null
   } catch {
-    // ROMLOTT JSON is ide fut: fail-soft (lásd a szekció fejét).
+    // CORRUPT JSON also lands here: fail-soft (see the section's header).
     return null
   }
 }
 
 /**
- * A BETÖLTÖTT CORE RÖVID AZONOSÍTÓJA a fejléchez, vagy `null`.
+ * The LOADED CORE's SHORT IDENTIFIER for the header, or `null`.
  *
- * MEMOIZÁLT, és ez LOAD-BEARING, nem optimalizálás: a `headerLine` MINDEN
- * renderben újraszámolódik (az Ink minden keyfelütésre, minden poll-tickre,
- * minden spinner-frame-re újrarendereli a fát). Egy itt lapuló `spawnSync`
- * tehát FRAME-enként egy processzt indítana — ugyanaz a hibaosztály, amiért a
- * `fetchRepoRoot` memoizálva van, csak sokkal sűrűbben ütve. A `null` EREDMÉNY
- * IS CACHE-ELŐDIK (külön `coreShaCached` flag): a nem-git úton különben minden
- * frame újra megpróbálná a spawnt, és pont a legrosszabb (leglassabb) ágon.
+ * MEMOIZED, and this is LOAD-BEARING, not an optimization: `headerLine`
+ * RECOMPUTES on every render (Ink re-renders the tree on every keystroke,
+ * every poll tick, every spinner frame). A `spawnSync` lurking here would
+ * therefore start one process PER FRAME — the same bug class `fetchRepoRoot`
+ * is memoized against, just hit much more densely. The `null` RESULT IS ALSO
+ * CACHED (separate `coreShaCached` flag): otherwise, on the non-git path
+ * every frame would retry the spawn, and on exactly the worst (slowest) branch.
  *
- * A `coreRoot` PARAMÉTER csak teszt-horgony; élesben a modul saját helye
- * (CORE_ROOT) az egyetlen helyes válasz — lásd a CORE_ROOT fejét.
+ * The `coreRoot` PARAMETER is only a test anchor; in production the module's
+ * own location (CORE_ROOT) is the only correct answer — see CORE_ROOT's header.
  */
 export function fetchCoreSha({ coreRoot = CORE_ROOT } = {}) {
   if (coreShaCached) return coreShaCache

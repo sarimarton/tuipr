@@ -1,165 +1,174 @@
-// tuipr — ALLOWLIST: a claude-hívás IZOLÁCIÓJA és engedély-politikája.
+// tuipr — ALLOWLIST: the ISOLATION and permission policy for the claude call.
 //
-// Ami itt lakik: a setting-sources (a user-szintű CLAUDE.md kizárása), az
-// allowed/disallowed tool-listák, a permission-realitás prompt-blokk és a
-// denial-üzenetek.
+// What lives here: the setting sources (excluding the user-level CLAUDE.md),
+// the allowed/disallowed tool lists, the permission-reality prompt block, and
+// the denial messages.
 //
-// TISZTA KONSTANS+FORMÁZÓ RÉTEG: NULLA projekt-import (mérve). Ez szándékos —
-// így a token-határos, csapdás tesztek egy KIS fájlt címeznek, nem a 6000
-// sorosat.
+// PURE CONSTANT+FORMATTER LAYER: ZERO project imports (measured). This is
+// deliberate — so the token-boundary, trap-laden tests target a SMALL file,
+// not the 6000-line one.
 //
-// A LISTÁK BŐVÍTÉSÉNEK HELYE EZ A FÁJL (a denial-üzenet is ide irányít).
+// THIS FILE IS WHERE THE LISTS GET EXTENDED (the denial message points here too).
 
-// --- IZOLÁCIÓ: a user-szintű CLAUDE.md kizárása ------------------------------
+// --- ISOLATION: excluding the user-level CLAUDE.md --------------------------
 //
-// A MÉRT LELET: a review-agent a user gépén `claude-usage gate; echo "exit=$?"`
-// futtatásába kezdett — ez az utasítás a USER-SZINTŰ globális CLAUDE.md-ből
-// szivárgott be (az utasítja az agentet gate-futtatásra minden komolyabb munka
-// előtt). A review-agentnek a user workflow-instrukcióihoz semmi köze.
+// THE MEASURED FINDING: the review agent, on the user's machine, started
+// running `claude-usage gate; echo "exit=$?"` — this instruction leaked in
+// from the USER-LEVEL global CLAUDE.md (which instructs the agent to run the
+// gate before any substantial work). The review agent has nothing to do with
+// the user's workflow instructions.
 //
-// A MÉRÉS (claude 2.1.238, 2026-08-03, két minimál haiku-próba a mobile
-// checkoutban, --max-budget-usd plafonnal):
-//   1. `--setting-sources project,local` + "látsz-e claude-usage gate
-//      utasítást?" → user_md: FALSE, project_md: TRUE — a user-szintű CLAUDE.md
-//      kizárva, a PROJEKT CLAUDE.md megmarad.
-//   2. Ugyanez `--tools Skill` mellett → agent_review_available: TRUE — a
-//      projekt-szintű skillek/slash-parancsok (.claude/commands/agent-review.md)
-//      NEM settings-forrásból jönnek, tehát elérhetők maradnak.
-//   3. A `--bare` NEM alternatíva: a `--help` szerint bare módban "OAuth and
-//      keychain are never read" — a subscription-authos usernél maga az auth
-//      halna meg. A `--setting-sources` a szűkebb, célzott eszköz.
+// THE MEASUREMENT (claude 2.1.238, 2026-08-03, two minimal haiku trials in
+// the mobile checkout, with a --max-budget-usd ceiling):
+//   1. `--setting-sources project,local` + "can you see a claude-usage gate
+//      instruction?" → user_md: FALSE, project_md: TRUE — the user-level
+//      CLAUDE.md is excluded, the PROJECT CLAUDE.md remains.
+//   2. Same, with `--tools Skill` added → agent_review_available: TRUE — the
+//      project-level skills/slash commands (.claude/commands/agent-review.md)
+//      do NOT come from a settings source, so they stay available.
+//   3. `--bare` is NOT an alternative: per `--help`, in bare mode "OAuth and
+//      keychain are never read" — for a subscription-auth user, auth itself
+//      would die. `--setting-sources` is the narrower, targeted tool.
 export const AI_REVIEW_SETTING_SOURCES = 'project,local'
 export const AI_REVIEW_SETTING_SOURCES_ARGS = ['--setting-sources', AI_REVIEW_SETTING_SOURCES]
 
 /**
- * A PERMISSION-ALLOWLIST — a `--tools`-tól FÜGGETLEN, MÁSODIK kapu.
+ * The PERMISSION ALLOWLIST — a SECOND gate, INDEPENDENT of `--tools`.
  *
- * MIÉRT KELL (MÉRT ÉLES BLOKKOLÓ, claude 2.1.220, a #904-es futás gyökere):
- * a `--tools` CSAK a tool-KÉSZLETET szűkíti; azt, hogy egy engedélyezett tool
- * konkrét hívása LEFUT-E, a permission-réteg dönti el. A TUI
- * `--permission-mode dontAsk`-kal indít (non-interaktívban nincs, aki
- * válaszoljon a promptra), a user `~/.claude/settings.json`-jában viszont
- * `"allow": []` áll — és ilyenkor a Bash-hívások DENIED lesznek. IZOLÁLTAN
- * MÉRVE (`--setting-sources ''` + üres allowlistes settings, `--tools Bash`,
- * `dontAsk`, prompt: `gh pr view 1 --json title`):
+ * WHY THIS IS NEEDED (MEASURED HARD BLOCKER, claude 2.1.220, the root cause
+ * of the #904 run): `--tools` ONLY narrows the tool SET; whether a specific
+ * call of an allowed tool ACTUALLY RUNS is decided by the permission layer.
+ * The TUI starts with `--permission-mode dontAsk` (non-interactively there's
+ * no one to answer the prompt), but the user's `~/.claude/settings.json` has
+ * `"allow": []` — and in that case Bash calls get DENIED. MEASURED IN
+ * ISOLATION (`--setting-sources ''` + settings with an empty allowlist,
+ * `--tools Bash`, `dontAsk`, prompt: `gh pr view 1 --json title`):
  *
  *   subtype=success, is_error=false, permission_denials=[{
  *     "tool_name":"Bash","tool_use_id":"toolu_014PyJ…",
  *     "tool_input":{"command":"gh pr view 1 --json title ."}}]
  *
- * Vagyis a burkoló SIKERT jelent, a review viszont egy lépést sem tett meg. Ez
- * a #904-es hazug-végállapot osztály LEGSÚLYOSABB tagja: a user gépén az
- * AI-review ELVI SZINTEN járhatatlan volt.
+ * I.e. the wrapper reports SUCCESS, while the review didn't complete a single
+ * step. This is the WORST member of the #904 lying-end-state class: on the
+ * user's machine, the AI review was IN PRINCIPLE unusable.
  *
- * A MEGOLDÁS A CLI-BEN MEGVAN, ÉS MÉRVE HAT: ugyanaz a hívás
- * `--allowedTools 'Bash(gh pr view:*)'`-szal `permission_denials: []`-t adott.
- * A flag tehát a `dontAsk` MELLETT is érvényesül, és NEM igényli a user
- * `settings.json`-jának módosítását — az az ő gépe, nem a mi dolgunk.
+ * THE FIX EXISTS IN THE CLI, AND MEASURABLY WORKS: the same call with
+ * `--allowedTools 'Bash(gh pr view:*)'` gave `permission_denials: []`. So the
+ * flag takes effect ALONGSIDE `dontAsk`, and does NOT require modifying the
+ * user's `settings.json` — that's their machine, not our business.
  *
- * MIÉRT PREFIX-MINTÁK ÉS NEM CSUPASZ `Bash`: egy csupasz `Bash` az EGÉSZ
- * shellt engedélyezné, és ezzel a `--tools` szűkítése (nincs Write/Edit, az
- * agent a REPÓT nem módosíthatja) értelmét vesztené — a Bash-en bármi átmegy.
- * A `Bash(<prefix>:*)` a MÉRT szintaxis (`claude --help`: `"Bash(git *) Edit"`),
- * és a lista PONTOSAN a review-hoz kellő parancsokat fedi.
+ * WHY PREFIX PATTERNS AND NOT A BARE `Bash`: a bare `Bash` would allow the
+ * WHOLE shell, and that would defeat the point of narrowing `--tools` (no
+ * Write/Edit, the agent can't modify the REPO) — anything goes through Bash.
+ * `Bash(<prefix>:*)` is the MEASURED syntax (`claude --help`:
+ * `"Bash(git *) Edit"`), and the list covers EXACTLY the commands the review
+ * needs.
  *
- * A LISTA FORRÁSA KÉT MÉRÉS:
- *   1. a #904-es futás naplója: ott a `gh pr view`, a `hunk session list` és a
- *      `git log` lett denied; a `gh pr diff` és a `git diff` a promptban
- *      kimondottan szerepel;
- *   2. a user élő tesztjének denial-listája + az agent-review skill LELTÁRA
- *      (mobile repo `.claude/commands/agent-review.md`, 478 sor). A skill
- *      lokális futása TÉNYLEGESEN hívja: `gh pr diff`/`gh pr view` (STEP 2),
- *      `pnpm exec list-changed-files` (STEP 2), `gh api repos/…/pulls/N/
- *      reviews|comments --paginate` (STEP 4b reconciliation + REVIEW_COUNT),
- *      a jira MCP-t (sweep-jira-compliance: a ticket betöltése), és Task-kal
- *      delegál (8 párhuzamos sweep + validation). A user mérésében a
- *      `gh pr checks`, a `gh api …/pulls/904/reviews` és a
- *      `mcp__atlassian__jira_get` lett denied — mind olvasó út.
+ * THE LIST'S SOURCE IS TWO MEASUREMENTS:
+ *   1. the #904 run's log: there, `gh pr view`, `hunk session list`, and
+ *      `git log` got denied; `gh pr diff` and `git diff` are explicitly named
+ *      in the prompt;
+ *   2. the user's live test's denial list + the agent-review skill's
+ *      INVENTORY (mobile repo `.claude/commands/agent-review.md`, 478 lines).
+ *      The skill's local run ACTUALLY calls: `gh pr diff`/`gh pr view`
+ *      (STEP 2), `pnpm exec list-changed-files` (STEP 2), `gh api repos/…/
+ *      pulls/N/reviews|comments --paginate` (STEP 4b reconciliation +
+ *      REVIEW_COUNT), the jira MCP (sweep-jira-compliance: loading the
+ *      ticket), and delegates via Task (8 parallel sweeps + validation). In
+ *      the user's measurement, `gh pr checks`, `gh api …/pulls/904/reviews`,
+ *      and `mcp__atlassian__jira_get` got denied — all read-only paths.
  *
- * AMI SZÁNDÉKOSAN NINCS BENT: a csupasz `Bash` (az egész shell), a mutáló gh-utak
- * (`gh pr comment/review/merge` — a human-in-the-loop kapu megkerülése lenne),
- * és a MUTÁLÓ jira-toolok (jira_comment/create/update/transition). A `gh api`
- * allow-ja prefix-minta, tehát a `-X POST`-ot ELVBŐL nem tudja kizárni — azt a
- * prompt explicit tilalma és az AI_REVIEW_DISALLOWED_TOOLS fedi (deny > allow).
+ * WHAT'S DELIBERATELY NOT IN HERE: a bare `Bash` (the whole shell), the
+ * mutating gh paths (`gh pr comment/review/merge` — that would bypass the
+ * human-in-the-loop gate), and the MUTATING jira tools
+ * (jira_comment/create/update/transition). The `gh api` allow is a prefix
+ * pattern, so it CANNOT exclude `-X POST` in principle — that's covered by
+ * the prompt's explicit prohibition and AI_REVIEW_DISALLOWED_TOOLS
+ * (deny > allow).
  */
 export const AI_REVIEW_ALLOWED_TOOLS = [
-  // A PR metaadata és diffje — a review BEMENETE.
+  // The PR's metadata and diff — the review's INPUT.
   'Bash(gh pr:*)',
-  // A CI-státusz — a user mérésében denied volt (`gh pr checks 904 …`).
+  // The CI status — was denied in the user's measurement (`gh pr checks 904 …`).
 
-  // A gh api OLVASÁSOK: reviews/comments (reconciliation, REVIEW_COUNT).
-  // MÉRT CSAPDA: a `gh api repos:*` minta NEM illeszkedett a
-  // `gh api repos/<org>/...` hívásra — az illesztés token-határos, a
-  // `repos` token != `repos/<org>/...`. Ezért az `api` teljes token után
-  // zárunk. A mutációt (gh api -f/-X POST) a prompt tiltja — prefixszel nem
-  // kifejezhető; dokumentált, vállalt maradvány-kockázat (saját orchestrált
-  // review-agent, explicit no-mutation instrukcióval).
+  // The gh api READS: reviews/comments (reconciliation, REVIEW_COUNT).
+  // MEASURED TRAP: the `gh api repos:*` pattern did NOT match the
+  // `gh api repos/<org>/...` call — matching is token-boundary based, and
+  // the `repos` token != `repos/<org>/...`. So we close after the full `api`
+  // token. Mutation (gh api -f/-X POST) is forbidden by the prompt — it
+  // can't be expressed with a prefix; a documented, accepted residual risk
+  // (our own orchestrated review agent, with an explicit no-mutation
+  // instruction).
   'Bash(gh api:*)',
-  // Az agent-review STEP 2 fájl-listázója (repo-lokális, read-only script).
+  // The agent-review STEP 2 file lister (repo-local, read-only script).
   'Bash(pnpm exec list-changed-files:*)',
-  // A hunk-CLI: az agent IDE írja a findingokat (ez a v2-út egész lényege).
+  // The hunk CLI: this is where the agent WRITES the findings (the whole
+  // point of the v2 path).
   'Bash(hunk:*)',
-  // A lokális git-történet és diff — a finding kontextusa.
+  // The local git history and diff — the finding's context.
   'Bash(git log:*)',
   'Bash(git diff:*)',
   'Bash(git show:*)',
-  // A user 3. elhasalt futásának denialjei: keresés és CI-log — mind olvasó.
+  // Denials from the user's 3rd failed run: search and CI log — both read-only.
   'Bash(git grep:*)',
   'Bash(gh run:*)',
-  // A user 4. futásának MÉRT denialjei — mindkettő olvasó út:
-  //   - `git ls-tree`: a repo-fa listázása (a review a struktúrát nézi);
-  //   - az eslint MCP `lint-files` toolja: a lint-sweep legitim olvasó útja —
-  //     az agent a PROJEKT MCP-szervereit örökli (--setting-sources project),
-  //     tehát a tool elérhető, csak a permission-réteg tagadta meg.
+  // MEASURED denials from the user's 4th run — both are read-only paths:
+  //   - `git ls-tree`: listing the repo tree (the review looks at the structure);
+  //   - the eslint MCP's `lint-files` tool: the lint sweep's legitimate
+  //     read-only path — the agent inherits the PROJECT's MCP servers
+  //     (--setting-sources project), so the tool is available, just the
+  //     permission layer denied it.
   'Bash(git ls-tree:*)',
-  // A user 5. futásának MÉRT denialje: `git check-ignore -v <fájl>` — olvasó út
-  // (azt mondja meg, ignorált-e egy fájl és melyik szabály fogja).
+  // MEASURED denial from the user's 5th run: `git check-ignore -v <file>` —
+  // a read-only path (tells you whether a file is ignored and by which rule).
   //
-  // MIÉRT MARAD AZ ENUMERÁCIÓ, ÉS NEM EGY GENERÁL `Bash(git:*)` + mutáló-deny:
-  // a deny-oldal prefix-szinten NEM kifejezhető. A git a verb ELŐTT is fogad
-  // flageket (`git -C <út> push`, `git -c <konfig> commit`), tehát egy
-  // `Bash(git push:*)` deny ezeket nem fogná; a `-c core.fsmonitor=<parancs>`
-  // ráadásul tetszőleges parancsfuttatás. Egy tág allow mellett a deny-lista
-  // tehát lyukas lenne — így minden ÚJ olvasó ige mért denialként jön be, és
-  // egyenként kerül fel ide (vállalt, dokumentált súrlódás).
+  // WHY THE ENUMERATION STAYS, AND NOT A GENERAL `Bash(git:*)` + mutating-deny:
+  // the deny side CANNOT be expressed at prefix level. git accepts flags
+  // BEFORE the verb too (`git -C <path> push`, `git -c <config> commit`), so
+  // a `Bash(git push:*)` deny wouldn't catch these; `-c core.fsmonitor=<cmd>`
+  // on top of that runs an arbitrary command. With a broad allow, the deny
+  // list would therefore be full of holes — so every NEW read-only verb comes
+  // in as a measured denial, and gets added here one at a time (accepted,
+  // documented friction).
   'Bash(git check-ignore:*)',
   'mcp__eslint__lint-files',
-  // A jira MCP OLVASÓ toolok: a sweep-jira-compliance a ticketet (summary,
-  // description, comments) MCP-n tölti be. FIGYELEM: a `jira_comments` (többes)
-  // OLVAS, a `jira_comment` (egyes) ÍR — utóbbi tilos.
+  // The jira MCP's READ tools: sweep-jira-compliance loads the ticket
+  // (summary, description, comments) via MCP. NOTE: `jira_comments` (plural)
+  // READS, `jira_comment` (singular) WRITES — the latter is forbidden.
   'mcp__atlassian__jira_get',
   'mcp__atlassian__jira_search',
   'mcp__atlassian__jira_comments',
-  // A skill-hívás maga (`/agent-review`, `hunk-review`) és az agent-fanout: az
-  // agent-review 8 párhuzamos sweep-et + validation-taskokat delegál.
+  // The skill invocation itself (`/agent-review`, `hunk-review`) and the
+  // agent fan-out: agent-review delegates 8 parallel sweeps + validation tasks.
   'Skill',
   'Task',
-  // Az olvasás: a `--tools`-ban is bent van, de a permission-réteg külön kapu.
+  // Reading: it's also in `--tools`, but the permission layer is a separate gate.
   'Read',
   'Grep',
   'Glob',
 ]
 
-/** Az allowlist argv-alakja. A flag MÉRT neve `--allowedTools` (camelCase is elfogadott). */
+/** The allowlist's argv shape. The flag's MEASURED name is `--allowedTools` (camelCase is also accepted). */
 export const AI_REVIEW_ALLOWED_TOOLS_ARGS = ['--allowedTools', ...AI_REVIEW_ALLOWED_TOOLS]
 
 /**
- * AZ EXPLICIT DENY-LISTA — védelem egy JÖVŐBELI allow-lazítás ellen.
+ * THE EXPLICIT DENY LIST — protection against a FUTURE allow-loosening.
  *
- * A Claude Code permission-rétegében a deny ERŐSEBB az allow-nál, tehát ez a
- * lista akkor is tart, ha valaki később egy tágabb `Bash(gh pr:*)` allow-t
- * venne fel. A `gh api -X POST` prefix-mintával NEM fejezhető ki (a minta a
- * parancs ELEJÉRE illeszkedik, a `-X POST` a végén van) — azt a prompt
- * tilalma fedi.
+ * In Claude Code's permission layer, deny is STRONGER than allow, so this
+ * list holds even if someone later adds a broader `Bash(gh pr:*)` allow.
+ * `gh api -X POST` CANNOT be expressed with a prefix pattern (the pattern
+ * matches the START of the command, and `-X POST` is at the end) — that's
+ * covered by the prompt's prohibition.
  */
 export const AI_REVIEW_DISALLOWED_TOOLS = [
-  // A `gh pr` MUTALO alparancsai. A lista a TAGABB `Bash(gh pr:*)` allow parja:
-  // az allow az olvaso utakat (list/view/diff/checks/status) egy mintaval engedi,
-  // a mutaciot EZ tartja. MERT alap: a `gh --help` szerint a verb ELOTT csak
-  // `--help`/`--version` all, tehat a `gh <mutalo-verb>` prefix nem kerulheto meg
-  // (szemben a `git -c core.fsmonitor=<parancs>`-csal, amiert a git-nel maradt az
-  // enumeracio). A deny ERŐSEBB az allow-nal, tehat ez akkor is tart, ha az allow
-  // kesobb tovabb tagul.
+  // The MUTATING subcommands of `gh pr`. This list is the pair of the
+  // BROADER `Bash(gh pr:*)` allow: the allow permits the read-only paths
+  // (list/view/diff/checks/status) with one pattern, THIS holds back the
+  // mutation. MEASURED basis: per `gh --help`, only `--help`/`--version` can
+  // precede the verb, so the `gh <mutating-verb>` prefix cannot be worked
+  // around (unlike `git -c core.fsmonitor=<command>`, which is why the
+  // enumeration stayed with git). Deny is STRONGER than allow, so this holds
+  // even if the allow gets broadened further later.
   'Bash(gh pr comment:*)',
   'Bash(gh pr review:*)',
   'Bash(gh pr merge:*)',
@@ -170,7 +179,7 @@ export const AI_REVIEW_DISALLOWED_TOOLS = [
   'Bash(gh pr reopen:*)',
   'Bash(gh pr lock:*)',
   'Bash(gh pr unlock:*)',
-  // A `gh run` mutalo utai: egy rerun/cancel a CI-t mozgatja, a delete torol.
+  // The mutating paths of `gh run`: a rerun/cancel moves CI, delete deletes.
   'Bash(gh run cancel:*)',
   'Bash(gh run rerun:*)',
   'Bash(gh run delete:*)',
@@ -180,87 +189,91 @@ export const AI_REVIEW_DISALLOWED_TOOLS = [
 export const AI_REVIEW_DISALLOWED_TOOLS_ARGS = ['--disallowedTools', ...AI_REVIEW_DISALLOWED_TOOLS]
 
 /**
- * A MEGTAGADOTT HÍVÁSOK OLVASHATÓ ALAKJA — a PARANCS, nem a darabszám.
+ * The READABLE FORM of the denied calls — the COMMAND, not the count.
  *
- * MÉRT SÉMA (lásd az `AI_REVIEW_ALLOWED_TOOLS` fejét): a `tool_input.command`
- * tartalmazza a pontos parancsot. A régi üzenet ("3 permission-megtagadásba
- * futott") ezt ELDOBTA, tehát a user nem tudta, MIT vegyen fel az allowlistbe —
- * és ez épp az az információ, ami a hibát javíthatóvá teszi.
+ * MEASURED SCHEMA (see `AI_REVIEW_ALLOWED_TOOLS`'s header): `tool_input.command`
+ * carries the exact command. The old message ("ran into 3 permission
+ * denials") DROPPED this, so the user didn't know WHAT to add to the
+ * allowlist — and that's exactly the information that makes the error
+ * actionable.
  *
- * A NEM-BASH toolokra (ahol nincs `command`) a TOOL NEVE megy ki: az is
- * cselekvésre alkalmas (`Write` → tudni, hogy írni akart).
+ * For NON-BASH tools (where there's no `command`) the TOOL'S NAME goes out
+ * instead: that's actionable too (`Write` → know that it wanted to write).
  */
 export function deniedCommandList(denials) {
   const list = Array.isArray(denials) ? denials : []
   return list.map((d) => {
     const cmd = d?.tool_input?.command
     if (typeof cmd === 'string' && cmd.trim() !== '') return cmd.trim()
-    // A `command` nélküli tool: a NEVE a legbeszédesebb, ami megvan.
-    return String(d?.tool_name ?? '(ismeretlen tool)')
+    // The tool without a `command`: its NAME is the most telling thing we have.
+    return String(d?.tool_name ?? '(unknown tool)')
   })
 }
 
 /**
- * A DENIALS-HIBA CSELEKVÉSRE ALKALMAS SZÖVEGE.
+ * The ACTIONABLE TEXT of the denials error.
  *
- * A HÁROM KÖTELEZŐ ELEM (a régi üzenetben EGYIK sem volt benne, csak a szám):
- *  1. MELYIK PARANCSOT tagadta meg — enélkül a user nem tudja, mit engedélyezzen;
- *  2. MIÉRT — a `dontAsk` + a settings `allow` listája a KÉT tényező, és a
- *     usernek tudnia kell, hogy ez KONFIGURÁCIÓS ügy, nem review-hiba;
- *  3. MIT TEHET — konkrétan: mit vegyen fel a `~/.claude/settings.json`
- *     `permissions.allow` listájába, MÁSOLHATÓ alakban.
+ * THE THREE REQUIRED ELEMENTS (NEITHER was in the old message, only the count):
+ *  1. WHICH COMMAND got denied — without this the user doesn't know what to allow;
+ *  2. WHY — `dontAsk` + the settings `allow` list are the TWO factors, and
+ *     the user needs to know this is a CONFIGURATION matter, not a review bug;
+ *  3. WHAT THEY CAN DO — concretely: what to add to `~/.claude/settings.json`'s
+ *     `permissions.allow` list, in a COPYABLE form.
  *
- * A LISTA CSONKOLVA: egy 20 elemű denials-lista a status-sort használhatatlanná
- * tenné. Az ELSŐ HÁROM parancs a diagnózishoz elég (a #904-en mind ugyanabból az
- * osztályból jött), a maradék darabszáma pedig kimondva marad — nem hallgatjuk
- * el, hogy több is volt.
+ * THE LIST IS TRUNCATED: a 20-item denials list would make the status line
+ * unusable. The FIRST THREE commands are enough for the diagnosis (on #904
+ * they all came from the same class), and the remaining count is stated
+ * plainly — we don't hide that there were more.
  */
 export function denialMessage(denials) {
   const cmds = deniedCommandList(denials)
   const shown = cmds.slice(0, 3)
   const rest = cmds.length - shown.length
-  const list = shown.map((c) => `\`${c}\``).join(', ') + (rest > 0 ? ` (+${rest} további)` : '')
+  const list = shown.map((c) => `\`${c}\``).join(', ') + (rest > 0 ? ` (+${rest} more)` : '')
   return (
-    `a claude -p ${cmds.length} permission-megtagadásba futott — a review nem teljes. `
-    + `A MEGTAGADOTT hívások: ${list}. `
-    + 'OK: a review `--permission-mode dontAsk`-kal fut, és ezek a parancsok sem az '
-    + 'allowlistünkön, sem a `~/.claude/settings.json` `permissions.allow` listáján nincsenek. '
-    + 'MIT TEHETSZ: vedd fel őket az `allow` listába '
-    + `(pl. ${shown.map((c) => `"Bash(${c.split(/\s+/).slice(0, 3).join(' ')}:*)"`).join(', ')}), `
-    + 'vagy jelezd, hogy a TUI beépített allowlistje hiányos — a bővítés helye a core '
-    + '`AI_REVIEW_ALLOWED_TOOLS` listája (tuipr, bin/next/allowlist.mjs).'
+    `claude -p ran into ${cmds.length} permission denial(s) — the review is incomplete. `
+    + `The DENIED calls: ${list}. `
+    + 'WHY: the review runs with `--permission-mode dontAsk`, and these commands are '
+    + 'in neither our allowlist nor `~/.claude/settings.json`\'s `permissions.allow` list. '
+    + 'WHAT YOU CAN DO: add them to the `allow` list '
+    + `(e.g. ${shown.map((c) => `"Bash(${c.split(/\s+/).slice(0, 3).join(' ')}:*)"`).join(', ')}), `
+    + 'or report that the TUI\'s built-in allowlist is incomplete — the place to extend it is '
+    + 'core\'s `AI_REVIEW_ALLOWED_TOOLS` list (tuipr, bin/next/allowlist.mjs).'
   )
 }
 
-// A KÖZÖS PROMPT-BLOKK a permission-realitásokról — MINDKÉT review-út kapja.
+// The SHARED PROMPT BLOCK about permission realities — BOTH review paths get it.
 //
-// (c) A COMPOUND-PARANCS ELVBŐL nem engedhető: a permission-minták
-// PREFIX-alapúak, tehát egy `gh pr checks 904 …; gh api …` alakú, `;`-vel
-// fűzött parancs akkor is denied, ha MINDKÉT fele külön engedett lenne — a
-// user élő tesztje pontosan ezen halt el. A külön futtatás olcsóbb és
-// robusztusabb, mint bármilyen compound-parsing a mi oldalunkon.
+// (c) A COMPOUND COMMAND is IN PRINCIPLE not permitted: the permission
+// patterns are PREFIX-based, so a command chained with `;` in the shape
+// `gh pr checks 904 …; gh api …` gets denied even if BOTH halves would be
+// individually allowed — the user's live test died on exactly this. Running
+// them separately is cheaper and more robust than any compound parsing on
+// our side.
 //
-// (a-fallback) A user-szintű instrukciók tilalma DEFENSE-IN-DEPTH: az
-// elsődleges védelem a `--setting-sources project,local` (mérve kizárja a
-// user-szintű CLAUDE.md-t), de ha bármilyen úton mégis beszivárogna egy
-// workflow-utasítás (pl. egy jövőbeli CLI-verzió más forrás-szemantikával),
-// a prompt kimondja, hogy nem követendő. A `claude-usage` név szerint tiltva:
-// a mért denial pontosan ez volt.
+// (a-fallback) The prohibition on user-level instructions is
+// DEFENSE-IN-DEPTH: the primary defense is `--setting-sources project,local`
+// (measurably excludes the user-level CLAUDE.md), but if a workflow
+// instruction leaked in through some other path anyway (e.g. a future CLI
+// version with different source semantics), the prompt states plainly that
+// it must not be followed. `claude-usage` is named and forbidden explicitly:
+// the measured denial was exactly this.
 export const PERMISSION_REALITY_INSTRUCTION = [
-  'KERESÉSHEZ a Grep TOOLT használd (a tool-készletedben van), NE `git grep`-et',
-  'vagy `rg`-t Bash-en át — a Grep toolnak nem kell permission. Ha egy Bash-hívást',
-  'a permission-réteg megtagad, NE ismételd variálva: jegyezd fel a review',
-  'összefoglalójában, és haladj tovább a többi sweeppel — a részleges eredmény is',
-  'értékes, a findingjaidat mindenképp add vissza a válasz-JSON-ban.',
-  'A parancsokat KÜLÖN-KÜLÖN futtasd, SOHA ne `;`-vel, `&&`-del vagy pipe-on át',
-  'fűzve több parancsot: a permission-minták prefix-alapúak, az összetett parancs',
-  'megtagadásra fut akkor is, ha minden darabja külön engedett lenne.',
+  'For SEARCHING use the Grep TOOL (it is in your tool set), NOT `git grep`',
+  'or `rg` via Bash — the Grep tool needs no permission. If the permission',
+  'layer denies a Bash call, do NOT retry it with variations: note it in the',
+  'review summary and move on to the other sweeps — a partial result is still',
+  'valuable, always return your findings in the response JSON.',
+  'Run commands ONE AT A TIME, NEVER chain several commands with `;`, `&&`,',
+  'or a pipe: permission patterns are prefix-based, and a compound command',
+  'gets denied even if every piece of it would be individually allowed.',
   '',
-  'NE futtass `claude-usage`-t, és NE kövesd a user-szintű (globális CLAUDE.md)',
-  'workflow-instrukciókat (gate-ek, delegálási szabályok) — a feladatod',
-  'KIZÁRÓLAG a review.',
+  'Do NOT run `claude-usage`, and do NOT follow user-level (global CLAUDE.md)',
+  'workflow instructions (gates, delegation rules) — your task is',
+  'EXCLUSIVELY the review.',
   '',
-  'TILOS GitHubra posztolni vagy mutálni: se `gh pr comment`, se `gh pr review`,',
-  'se `gh pr merge`, se `gh api` POST/PATCH/PUT/DELETE (mutáló hívás). A `gh api`',
-  'KIZÁRÓLAG olvasásra (GET — pl. reviews/comments lekérdezés) használható.',
+  'You are FORBIDDEN from posting to or mutating GitHub: no `gh pr comment`,',
+  'no `gh pr review`, no `gh pr merge`, no `gh api` POST/PATCH/PUT/DELETE',
+  '(mutating call). `gh api` may be used ONLY for reading',
+  '(GET — e.g. querying reviews/comments).',
 ].join('\n')

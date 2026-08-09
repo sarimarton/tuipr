@@ -1,27 +1,28 @@
-// tuipr — LAYOUT: cella-mérés és -csonkolás.
+// tuipr — LAYOUT: cell measurement and truncation.
 //
-// A LEGALSÓ RÉTEG: ez a modul NULLA projekt-modult importál, és nem is fog —
-// a cache-en kívül szinte minden modul hívja (displayWidth, clampCells), tehát
-// bármilyen visszafelé mutató import AZONNAL ciklust csinálna. A ciklus ebben a
-// projektben MÉRT, NÉMA hibaosztály (exit 13, 0 bájt kimenet) — az indoklás a
-// bin/tui-core.mjs fejlécében áll.
+// THE LOWEST LAYER: this module imports ZERO project modules, and never
+// will — apart from cache, nearly every module calls it (displayWidth,
+// clampCells), so any import pointing back up would IMMEDIATELY create a
+// cycle. The cycle is a MEASURED, SILENT bug class in this project (exit 13,
+// 0-byte output) — the reasoning is in bin/tui-core.mjs's header.
 //
-// Miért CELLA és nem karakter: a terminál cellákban renderel, a `.length` pedig
-// UTF-16 code unitot számol. A kettő eltérése az a tördelés-osztály, amit a user
-// NÉGYSZER bejelentett (emoji, variation selector, East-Asian-Wide jelek).
+// Why CELL and not character: the terminal renders in cells, while `.length`
+// counts UTF-16 code units. The mismatch between the two is the wrapping bug
+// class the user reported FOUR TIMES (emoji, variation selectors,
+// East-Asian-Wide glyphs).
 
-// East-Asian-Width "Wide" (W) és "Fullwidth" (F) intervallumok — a terminál
-// ezeket 2 cellán rendereli. RANGE-alapú, NEM codepoint-whitelist: a korábbi
-// lista (0x26a1/0x26d4/0x2753 + a 0x1f300–0x1faff emoji-blokk) csak a MAI
-// ikon-készletet fedte, így a ✅ U+2705 / ❌ U+274C / ⏳ U+23F3 (mind EAW=W,
-// tmux-ban MÉRT advance = 2) némán 1-nek méretett volna — a title-büdzsé
-// elcsúszik, az Ink tördel, a bash-sor túllóg. A hiba akkor csapott volna be,
-// amikor valaki ilyen ikont vezet be; ezért a mérő most a szabályt követi, nem
-// a jelenlegi ikonokat.
+// East-Asian-Width "Wide" (W) and "Fullwidth" (F) intervals — the terminal
+// renders these on 2 cells. RANGE-based, NOT a codepoint whitelist: the
+// earlier list (0x26a1/0x26d4/0x2753 + the 0x1f300–0x1faff emoji block)
+// covered only TODAY's icon set, so ✅ U+2705 / ❌ U+274C / ⏳ U+23F3 (all
+// EAW=W, MEASURED tmux advance = 2) would have silently measured as 1 — the
+// title budget drifts, Ink wraps, the bash row overflows. The bug would only
+// have struck when someone introduced such an icon; so the measurer now
+// follows the rule, not the current set of icons.
 //
-// A tábla az Unicode EastAsianWidth.txt W+F osztályaiból van szűkítve arra,
-// ami terminál-UI-ban egyáltalán előfordulhat (CJK, Hangul, kana, a
-// dingbat/misc-symbol Wide szigetek és az emoji-blokkok).
+// The table is narrowed down from the Unicode EastAsianWidth.txt W+F
+// classes to what can actually occur in a terminal UI (CJK, Hangul, kana,
+// the dingbat/misc-symbol Wide islands, and the emoji blocks).
 const WIDE_RANGES = [
   [0x1100, 0x115f], [0x231a, 0x231b], [0x2329, 0x232a],
   [0x23e9, 0x23ec], [0x23f0, 0x23f0], [0x23f3, 0x23f3],
@@ -49,42 +50,43 @@ function isWideCodePoint(cp) {
 }
 
 /**
- * Egy string terminál-cellában mért szélessége.
+ * A string's width as measured in terminal cells.
  *
- * Ugyanaz a csapda, mint a bash lista-nézetben: a variation selector (U+FE0F)
- * maga 0 cellát foglal, de a mögötte álló text-presentation base jelet 2
- * cellásra emeli (⚠️ = U+26A0 U+FE0F); az East-Asian-Wide jelek (⛔ U+26D4,
- * ❓ U+2753, ⚡ U+26A1, 🚀 U+1F680) pedig eleve 2-esek. Az 1 cellás jelek: az
- * ASCII, az ékezetes latin, és a ● / ○ / ✔ / ✗ (EAW=Ambiguous ill. Neutral).
- * A `.length` (UTF-16 code unit) tehát használhatatlan.
+ * The same trap as in the bash list view: a variation selector (U+FE0F)
+ * itself occupies 0 cells, but raises the text-presentation base glyph
+ * behind it to 2 cells (⚠️ = U+26A0 U+FE0F); the East-Asian-Wide glyphs
+ * (⛔ U+26D4, ❓ U+2753, ⚡ U+26A1, 🚀 U+1F680) are already 2 to begin with. The
+ * 1-cell glyphs: ASCII, accented Latin, and ● / ○ / ✔ / ✗ (EAW=Ambiguous or
+ * Neutral). So `.length` (UTF-16 code unit) is unusable.
  *
- * A szélességek valódi terminál-emulátorban (tmux, cursor-advance) MÉRVE, és a
- * test/next-tui.test.ts kézzel számolt konstansokra pineli őket — a mérő nem
- * hivatkozhat önmagára.
+ * The widths are MEASURED in a real terminal emulator (tmux, cursor-advance),
+ * and test/next-tui.test.ts pins them against hand-computed constants — the
+ * measurer can't cite itself as evidence.
  */
 export function displayWidth(s) {
   const chars = [...String(s)]
   let total = 0
   for (let i = 0; i < chars.length; i++) {
     const cp = chars[i].codePointAt(0)
-    if (cp === 0xfe0f) continue // variation selector: 0 cella
-    // A VS16 a text-presentation jelet emoji-presentationra emeli → 2 cella.
+    if (cp === 0xfe0f) continue // variation selector: 0 cells
+    // VS16 raises the text-presentation glyph to emoji presentation → 2 cells.
     const wide = chars[i + 1]?.codePointAt(0) === 0xfe0f || isWideCodePoint(cp)
     total += wide ? 2 : 1
   }
   return total
 }
 
-// A soronkénti fix rész: kurzor(2) + "#" + szám(5) + szóköz + szerző(5) +
+// The per-row fixed part: cursor(2) + "#" + number(5) + space + author(5) +
 
 /**
- * Egy string csonkolása CELLÁRA (nem karakterre), codepoint-alapon.
+ * Truncating a string to CELLS (not characters), codepoint-based.
  *
- * Ugyanaz a csapda, amit a user NÉGYSZER bejelentett: a `.slice` UTF-16 code
- * unitot vág, tehát (a) félbehasíthat egy surrogate párt (a terminálon
- * törmelék-glif), és (b) az emojikat 1 cellásnak hiszi, így a cellában mért
- * szélesség TÚLLÓG — az Ink tördel, és a keret szétesik. Itt a displayWidth
- * halmozódik codepointonként, és a limit ELÉRÉSEKOR állunk le.
+ * The same trap the user reported FOUR TIMES: `.slice` cuts UTF-16 code
+ * units, so it can (a) split a surrogate pair in half (a garbled glyph on the
+ * terminal), and (b) think emoji are 1 cell wide, so the cell-measured width
+ * OVERFLOWS — Ink wraps, and the frame falls apart. Here displayWidth
+ * accumulates codepoint by codepoint, and we stop the moment the limit is
+ * REACHED.
  */
 export function clampCells(s, cells) {
   const limit = Math.max(0, Math.floor(cells))
@@ -92,13 +94,14 @@ export function clampCells(s, cells) {
   const chars = [...String(s)]
   let out = ''
   for (let i = 0; i < chars.length; i++) {
-    // A NÖVEKMÉNYT a PREFIX újramérésével kapjuk, NEM `displayWidth(chars[i])`-vel.
-    // MÉRT BUG (a saját tesztem kapta el): a displayWidth a VS16-ot úgy kezeli,
-    // hogy az ELŐZŐ jelet emeli 2 cellásra (⚠️ = U+26A0 U+FE0F). Codepointonként
-    // mérve a pár 1 + 0 = 1 cellának jön ki 2 helyett, tehát a csonkolt cím
-    // CELLÁBAN túllógott (55 cella egy 54-es keretben) — pontosan az a
-    // tördelés-osztály, amit a user négyszer bejelentett. A prefix-mérés a
-    // lookaheadot megtartja.
+    // We get the INCREMENT by re-measuring the PREFIX, NOT via
+    // `displayWidth(chars[i])`. MEASURED BUG (caught by my own test):
+    // displayWidth handles VS16 by raising the PRECEDING glyph to 2 cells
+    // (⚠️ = U+26A0 U+FE0F). Measured per codepoint, the pair comes out to
+    // 1 + 0 = 1 cell instead of 2, so the truncated title OVERFLOWED in
+    // cells (55 cells inside a 54-cell frame) — exactly the wrapping bug
+    // class the user reported four times. Measuring the prefix keeps the
+    // lookahead intact.
     const next = out + chars[i]
     if (displayWidth(next) > limit) return out
     out = next
@@ -107,18 +110,18 @@ export function clampCells(s, cells) {
 }
 
 /**
- * Egy szöveg tördelése CELLA-szélességre, sorok tömbjét adva.
+ * Wrapping a text to a CELL width, returning an array of lines.
  *
- * MIÉRT A CORE-BAN ÉS MIÉRT NEM AZ INK TÖRDELÉSE: a hiba-overlay tartalma nyers
- * `gh`/`git` stderr — több soros, hosszú sorokkal, néha szóköz nélküli URL-lel
- * vagy tokennel. Ha ezt az Ink saját tördelésére bíznánk, a keretes Box belsejét
- * a MI szélesség-számításunk nélkül tördelné, és a keret szétesne (pontosan az
- * osztály, amit a user négyszer bejelentett). Itt a mérték ugyanaz a
- * displayWidth, amivel a keret is számol.
+ * WHY IN CORE AND NOT INK'S OWN WRAPPING: the error overlay's content is raw
+ * `gh`/`git` stderr — multi-line, with long lines, sometimes a URL or token
+ * with no spaces. If we left this to Ink's own wrapping, it would wrap the
+ * framed Box's interior without OUR width computation, and the frame would
+ * fall apart (exactly the bug class the user reported four times). Here the
+ * measure is the same displayWidth the frame computes with too.
  *
- * A tördelés (a) megtartja a MEGLÉVŐ sortöréseket (a stderr szerkezete
- * információ), (b) szóhatáron tör, de (c) a szónál hosszabb törmeléket
- * kényszerből elvágja — enélkül egy URL túllógna.
+ * The wrapping (a) preserves EXISTING line breaks (the stderr's structure is
+ * information), (b) breaks on word boundaries, but (c) forcibly cuts a chunk
+ * longer than a word — without this a URL would overflow.
  */
 export function wrapCells(text, cells) {
   const limit = Math.max(1, Math.floor(Number(cells) || 0))
@@ -133,16 +136,17 @@ export function wrapCells(text, cells) {
       const cand = line === '' ? word : `${line} ${word}`
       if (displayWidth(cand) <= limit) { line = cand; continue }
       if (line !== '') { out.push(line); line = '' }
-      // A SZÓ maga is hosszabb lehet a limitnél (URL, token): ilyenkor
-      // kényszer-vágás CELLÁRA, addig, amíg elfogy. A clampCells garantálja,
-      // hogy nem hasít félbe surrogate párt.
+      // The WORD itself can be longer than the limit too (a URL, a token):
+      // in that case, forced cutting to CELLS, until it's used up. clampCells
+      // guarantees that it won't split a surrogate pair.
       let rest = word
       while (displayWidth(rest) > limit) {
         const head = clampCells(rest, limit)
-        // Fail-safe a végtelen ciklus ellen: ha a limit olyan szűk, hogy még egy
-        // codepoint sem fér bele (pl. 1 cella + egy 2 cellás emoji), akkor is
-        // haladnunk KELL — egy codepointot kiadunk, túllógás árán. Ez az egyetlen
-        // hely, ahol a túllógás megengedett, mert az alternatíva a lefagyás.
+        // Fail-safe against an infinite loop: if the limit is so narrow that
+        // not even one codepoint fits (e.g. 1 cell + a 2-cell emoji), we
+        // still MUST make progress — emit one codepoint, at the cost of
+        // overflowing. This is the ONE place where overflow is allowed,
+        // because the alternative is hanging.
         const step = head === '' ? [...rest][0] : head
         out.push(step)
         rest = rest.slice(step.length)
@@ -154,60 +158,63 @@ export function wrapCells(text, cells) {
   return out
 }
 
-// --- Index-léptetés (a nyilas választók KÖZÖS primitívje) -------------------
+// --- Index stepping (the SHARED primitive of the arrow-key choosers) --------
 //
-// MIÉRT A LAYOUTBAN: KETTŐ fogyasztója van egymástól független rétegben — a
-// panel modál-választója ÉS az ai-review-config budget/modell léptetője. Ha a
-// panelben laknék, a config FELFELÉ importálna, ami ciklus-veszély; a legalsó,
-// nulla-importos rétegben viszont mindkettő lefelé hívja.
-// (MÉRVE: a vágás közben a config `budgetStep`-je egy panelben maradt
-// `stepIndex`-et hívott — ReferenceError HÍVÁSKOR, nem betöltéskor.)
+// WHY IN LAYOUT: it has TWO consumers in mutually independent layers — the
+// panel's modal chooser AND the ai-review-config budget/model stepper. If it
+// lived in the panel, config would import UPWARD, a cycle risk; in the
+// lowest, zero-import layer, though, both can call down into it.
+// (MEASURED: mid-refactor, config's `budgetStep` called a `stepIndex` left
+// behind in a panel — a ReferenceError AT CALL TIME, not load time.)
 
 /**
- * Index-léptetés körbejárással (wrap).
+ * Index stepping with wraparound.
  *
- * A DÖNTÉS: KÖRBEJÁR, nem áll meg a szélen. Két út van; a "megáll a szélen" azt
- * jelentené, hogy a defaulton (index 0) a `←` DEAD KEY — a user megnyomja, semmi
- * nem történik, és nem tudja, hogy a gomb nem működik, vagy a UI fagyott le. A
- * wrap MINDIG ad látható visszajelzést, és két elemnél a `←`/`→` amúgy is
- * ugyanoda visz.
+ * THE DECISION: IT WRAPS, it doesn't stop at the edge. There are two
+ * options; "stop at the edge" would mean that at the default (index 0) `←`
+ * is a DEAD KEY — the user presses it, nothing happens, and they don't know
+ * if the button is broken or the UI froze. Wrapping ALWAYS gives visible
+ * feedback, and with two elements `←`/`→` land on the same place anyway.
  *
- * A degenerált bemenet (üres lista, tartományon kívüli vagy negatív `current`)
- * NEM dob és NEM szivárog ki érvénytelen indexként: a hívó közvetlenül indexel
- * vele a `paths` tömbbe, és egy negatív vagy NaN index `undefined` utat adna —
- * a review-út némán elveszne (a reviewPathById ezt fail-closed elkapná, de a UI
- * addig hazug választást mutatna).
+ * A degenerate input (empty list, out-of-range or negative `current`) does
+ * NOT throw and does NOT leak out as an invalid index: the caller indexes
+ * directly into the `paths` array with it, and a negative or NaN index would
+ * give an `undefined` path — the review path would SILENTLY vanish (fail-
+ * closed `reviewPathById` would catch this, but until then the UI would show
+ * a lying choice).
  */
 export function stepIndex(current, length, delta) {
   const len = Number.isInteger(length) && length > 0 ? length : 1
   const d = Number.isInteger(delta) ? delta : 0
-  // A `current`-et ELŐBB a tartományba normalizáljuk, és CSAK utána léptetünk.
-  // Ha egyszerre tennénk (`(cur + d) % len`), egy tartományon kívüli current
-  // MÁS eredményt adna, mint a normalizáltja: a -3 @ len=2 `-1` lépéssel 0-t ad,
-  // a normalizált 1 viszont 0-t — a kettő csak véletlenül egyezik, len=3-nál
-  // már nem. A hívó a paths tömbbe indexel ezzel, tehát a determinizmus itt
-  // szerződés, nem szépségkérdés.
+  // We FIRST normalize `current` into range, and ONLY THEN step. If we did
+  // both at once (`(cur + d) % len`), an out-of-range current would give a
+  // DIFFERENT result than its normalized form: -3 @ len=2 gives `-1` with a
+  // step of 0, while the normalized 1 gives 0 — the two only coincide by
+  // accident, and no longer at len=3. The caller indexes into the paths array
+  // with this, so determinism here is a contract, not a nicety.
   const raw = Number.isInteger(current) ? current : 0
   const cur = ((raw % len) + len) % len
   return (((cur + d) % len) + len) % len
 }
 
-// --- SZÍN-INTERPOLÁCIÓ (a fade-átmenetekhez) ---------------------------------
+// --- COLOR INTERPOLATION (for the fade transitions) --------------------------
 
 /**
- * KÉT HEX SZÍN KÖZTI LINEÁRIS INTERPOLÁCIÓ, `t ∈ [0,1]`.
+ * LINEAR INTERPOLATION BETWEEN TWO HEX COLORS, `t ∈ [0,1]`.
  *
- * (wf31/56) A tompítás-átmenet (`FADED_COLOR` ↔ éles) frame-enkénti színét adja.
- * TISZTA függvény, cellától és terminálótól független — ezért itt lakik, a
- * layout-modulban, ahol a többi mérték-számítás is: a render-oldal csak KÉRI a
- * színt, nem számol.
+ * (wf31/56) Gives the per-frame color of the dimming transition (`FADED_COLOR`
+ * ↔ full brightness). A PURE function, independent of cells and terminal —
+ * that's why it lives here, in the layout module, alongside the other
+ * measurement computations: the render side only ASKS for the color, it
+ * doesn't compute it.
  *
- * A `t` KLAMPOLVA, és NEM dob: egy animációs ütemezőből érkező 1.02 vagy -0.001
- * (kerekítési maradék) nem viheti el a rendert egy kozmetikai érték miatt.
+ * `t` IS CLAMPED, and does NOT throw: a 1.02 or -0.001 (rounding remainder)
+ * coming from an animation scheduler must not take down the render over a
+ * cosmetic value.
  *
- * A BEMENET `#rrggbb` VAGY `#rgb`; érvénytelen alakra a `to` végállapot jön
- * vissza — FAIL-SAFE a végállapot felé: egy elrontott szín-literál a legrosszabb
- * esetben ELHAGYJA az animációt, nem tesz olvashatatlanná egy sort.
+ * THE INPUT IS `#rrggbb` OR `#rgb`; on an invalid form, the `to` end state
+ * comes back — FAIL-SAFE toward the end state: a broken color literal at
+ * worst LEAVES the animation, it doesn't make a row unreadable.
  */
 export function lerpHex(from, to, t) {
   const a = parseHex(from)
@@ -219,7 +226,7 @@ export function lerpHex(from, to, t) {
   return `#${[0, 1, 2].map((i) => mix(i).toString(16).padStart(2, '0')).join('')}`
 }
 
-/** `#rgb` / `#rrggbb` → `[r,g,b]`, vagy `null`. */
+/** `#rgb` / `#rrggbb` → `[r,g,b]`, or `null`. */
 function parseHex(v) {
   if (typeof v !== 'string') return null
   const h = v.trim().replace(/^#/, '')
@@ -233,14 +240,15 @@ function parseHex(v) {
 }
 
 /**
- * A FADE ÜTEMEZŐJE — melyik lépésnél tartunk, és kész van-e.
+ * THE FADE SCHEDULER — which step we're at, and whether it's done.
  *
- * A `step` 0-tól `steps`-ig megy; a `t` ebből SZÁMOLÓDIK, hogy a hívónak ne
- * kelljen osztania (a 0 lépésszám különben nullával osztana).
+ * `step` runs from 0 to `steps`; `t` is COMPUTED from this, so the caller
+ * doesn't have to divide (a step count of 0 would otherwise divide by zero).
  *
- * MIÉRT KÜLÖN FÜGGVÉNY: az input-megszakítás (a user kérése: "input esetén az
- * animációkat végállapotba tenni") EGY hívás — `fadeDone(steps)` —, és így a
- * "végállapot" fogalma EGY helyen van definiálva, nem három hívónál külön.
+ * WHY A SEPARATE FUNCTION: the input-interrupt (the user's request: "on
+ * input, put the animations into their end state") is ONE call —
+ * `fadeDone(steps)` — so the concept of "end state" is defined in ONE place,
+ * not separately at three call sites.
  */
 export function fadeProgress(step, steps) {
   const n = Math.max(1, Math.floor(Number(steps) || 1))

@@ -1,77 +1,80 @@
-// tuipr — CACHE: PR-számra kulcsolt, SESSION-idejű mérés-cache + lista-jelző
-// + review-nyom könyvelés + az AI-findings slotok.
+// tuipr — CACHE: PR-number-keyed, SESSION-lifetime measurement cache + list indicator
+// + review-trace bookkeeping + the AI-findings slots.
 //
-// TISZTA MODUL: NULLA projekt-import és NULLA I/O. Ez nem véletlen, hanem MÉRT
-// invariáns — a test/next-cache.test.ts a fájl EGÉSZÉT olvassa, és megköveteli,
-// hogy ne legyen benne se spawn, se fájl-I/O: a jelző-előállítók minden
-// renderben lefutnak, tehát egy itt lapuló processz-indítás a listát lassítaná.
+// PURE MODULE: ZERO project imports and ZERO I/O. This is not accidental, it's a
+// MEASURED invariant — test/next-cache.test.ts reads the WHOLE file, and requires
+// that it contain neither spawn nor file I/O: the indicator producers run on
+// every render, so a process-spawn lurking here would slow the list down.
 //
-// (A teszt korábban a core.mjs-t a `// === CACHE` … `// === CACHE-VÉGE` markerek
-// KÖZÖTT slice-olta. A fájl-per-szekció vágás után a modul MAGA a szekció —
-// és ezzel eltűnt az a hibaosztály, ahol egy elmozdult marker NÉMÁN üres
-// slice-ot ad, amin minden tiltó assertion "átmegy".)
+// (The test used to slice core.mjs BETWEEN the `// === CACHE` … `// === CACHE-END`
+// markers. After the file-per-section split, the module IS the section itself —
+// which eliminates the class of bug where a shifted marker SILENTLY yields an
+// empty slice, which every forbidding assertion "passes".)
 
-// === CACHE: PR-számra kulcsolt, SESSION-idejű mérés-cache + lista-jelző ======
+// === CACHE: PR-number-keyed, SESSION-lifetime measurement cache + list indicator ======
 //
-// A PROBLÉMA, amit megszüntet: az `i` panel újranyitása MINDEN alkalommal
-// újrafuttatta a merge-tree próbákat (a #911-en 7 jelölt, másodpercek). A user
-// ezt "zavaró"-nak nevezte, és joggal: ugyanarra a kérdésre ugyanaz a válasz —
-// hacsak nem mozdult el az, amiből a válasz származik.
+// The PROBLEM this eliminates: reopening the `i` panel reran the merge-tree
+// probes EVERY time (7 candidates on #911, seconds). The user called this
+// "distracting", and rightly so: the same answer to the same question —
+// unless whatever the answer derives from has moved.
 //
-// AMIBŐL A VÁLASZ SZÁRMAZIK, az a HORGONY, és PONTOSAN KÉT dolog:
-//   1) a PR `updatedAt`-je — új push/rebase/komment: a mért head már nem ez;
-//   2) a trunk (`origin/<main|dev>`, lásd trunkBranch) SHA — a merge-tree próba
-//      a trunk ELLEN mér, tehát a trunk elmozdulása az EREDMÉNYT változtatja
-//      meg, a PR-t nem érintve.
-// A kettő NEM helyettesíti egymást: egy PR-t nem érintő trunk-push a PR
-// updatedAt-jét nem mozdítja, mégis érvényteleníti a diagnózist.
+// WHAT THE ANSWER DERIVES FROM is the ANCHOR, and EXACTLY TWO things:
+//   1) the PR's `updatedAt` — a new push/rebase/comment: the measured head is
+//      no longer this;
+//   2) the trunk (`origin/<main|dev>`, see trunkBranch) SHA — the merge-tree
+//      probe measures AGAINST the trunk, so a trunk move CHANGES THE RESULT
+//      without touching the PR.
+// The two do NOT substitute for each other: a trunk push that doesn't touch a
+// PR doesn't move that PR's updatedAt, yet still invalidates the diagnosis.
 //
-// MIÉRT NEM TÖRLÜNK, HANEM ELAVULTNAK JELÖLÜNK: a listán jelezni kell, hogy
-// VAN mért eredmény, csak már nem érvényes. A törlés ("nincs mérés") és az
-// elavulás ("volt, de a bázis elmozdult") MÁS teendőt jelent a usernek, és a
-// cache-elt eredményt "kész"-nek mutatni a legdrágább hiba: a user a mért
-// conflict-hiányra hivatkozva mergelne egy elmozdult bázisú PR-t.
+// WHY WE DON'T DELETE, BUT MARK STALE INSTEAD: the list needs to signal that
+// THERE IS a measured result, just no longer valid. Deletion ("no measurement")
+// and staleness ("there was one, but the base moved") mean DIFFERENT next steps
+// for the user, and showing a cached result as "done" is the most expensive
+// mistake: the user would merge a PR with a moved base, citing the measured
+// absence of conflicts.
 //
-// MIÉRT SESSION-IDEJŰ (nem lemezen): a next kép óránként mozog; egy
-// perzisztens cache napokat élne túl, és a horgony-ellenőrzés minden induláskor
-// gh/git hívást kívánna soronként — épp azt a lassulást hozná vissza, amiért a
-// cache készült.
+// WHY SESSION-LIFETIME (not on disk): the next image moves hourly; a
+// persistent cache would outlive it by days, and the anchor check would want a
+// gh/git call per row on every startup — bringing back exactly the slowdown
+// the cache was built to remove.
 //
-// (1d) EZ A DÖNTÉS A **MÉRÉS-CACHE**-RE (diagnosis) ÁLL, ÉS VÁLTOZATLAN. A
-// REVIEW-EREDMÉNY azonban KÜLÖN, PERZISZTENS rétegbe került
-// (bin/next/review-store.mjs), mert MÁS TERMÉSZETŰ ADAT: KIFIZETETT (tokent
-// költött), és nem a queue ÁLLAPOTÁRÓL szól, hanem a PR DIFFJÉRŐL — tehát
-// pontosan addig érvényes, ameddig a horgonya áll, nem "a session végéig". A
-// fenti ellenérv sem áll rá: a lemez-olvasás EGYSZER fut (induláskor, kötegelten),
-// nem soronként és nem renderenként, tehát a listát nem lassítja. A user kérése:
-// "a review-kat cache-elje diszkre az app, mert fárasztó mindig újraindítani."
+// (1d) THIS DECISION APPLIES TO THE **MEASUREMENT CACHE** (diagnosis), AND IS
+// UNCHANGED. The REVIEW RESULT, however, moved to a SEPARATE, PERSISTENT layer
+// (bin/next/review-store.mjs), because it's data of a DIFFERENT NATURE: PAID
+// FOR (tokens spent), and it's not about the queue's STATE but about the PR's
+// DIFF — so it's valid for exactly as long as its anchor holds, not "until the
+// end of the session". The argument above doesn't apply to it either: the
+// disk read runs ONCE (at startup, batched), not per row and not per render,
+// so it doesn't slow the list down. The user's request: "have the app cache
+// reviews to disk, because restarting all the time is tiring."
 //
-// A KÉT RÉTEG NEM MOSÓDIK ÖSSZE, és ez a fájl NULLA-I/O MARAD (lásd a fejlécet):
-// a render-úton EZ a memória-cache áll; a lemez csak a TUI indulásakor és a
-// review befejezésekor/elvetésekor mozdul.
+// THE TWO LAYERS DO NOT BLEND: this file STAYS ZERO-I/O (see the header) — on
+// the render path THIS memory cache is what's used; the disk only moves at TUI
+// startup and when a review completes/is discarded.
 
-/** A cache slotjai. A diagnózis és a review-report FÜGGETLENÜL avul. */
+/** The cache's slots. The diagnosis and the review report go stale INDEPENDENTLY. */
 const CACHE_SLOTS = new Set(['diagnosis', 'reviewReport'])
 
-/** A review-nyom elfogadott forrásai. */
+/** The accepted sources of the review trace. */
 const REVIEW_TRACE_SOURCES = new Set(['ai', 'hunk'])
 
 /**
- * A NÉGYÁLLAPOTÚ lista-jelző glifjei.
+ * The glyphs of the FOUR-STATE list indicator.
  *
- * A SZÉLESSÉG MÉRVE (tmux 3.7b, CSI 6n cursor-advance, Ghostty-ban futó tmux):
+ * WIDTH AS MEASURED (tmux 3.7b, CSI 6n cursor-advance, tmux running in Ghostty):
  *   ⋯ U+22EF advance=1 · ✓ U+2713 advance=1 · ~ U+007E advance=1 · ⊙ U+2299 advance=1
- * Nem tippeltük meg: a user NÉGYSZER jelentette be az oszlop-csúszást, aminek
- * pontosan az a gyökere, hogy valaki egy glif szélességét megtippelte.
+ * Not guessed: the user reported the column-shift FOUR TIMES, and its root
+ * cause was exactly someone guessing a glyph's width.
  *
- * A "kész" jel `✓` U+2713 (THIN check), NEM `✔` U+2714 — az U+2714 az
- * approve-oszlop `approved` jele (RMARKS). "Egy jelentés, egy glif": ha a kettő
- * egyezne, a szem az approve-jelet olvasná ott, ahol a MÉRÉS készültségéről van
- * szó, és a két oszlop összemosódna.
+ * The "done" mark is `✓` U+2713 (THIN check), NOT `✔` U+2714 — U+2714 is the
+ * approve column's `approved` mark (RMARKS). "One meaning, one glyph": if the
+ * two matched, the eye would read the approve mark where the question is
+ * MEASUREMENT readiness, and the two columns would blur together.
  *
- * A `none` állapotnak NINCS glifje: az a leggyakoribb sor-állapot, és egy üres
- * helyfoglaló minden soron csak zaj (plusz egy cella minden sorban, a
- * title-büdzsé kárára).
+ * The `none` state has NO glyph: it's the most common row state, and an empty
+ * placeholder on every row is just noise (plus one cell per row, at the cost
+ * of the title budget).
  */
 export const CACHE_GLYPHS = {
   measuring: '⋯',
@@ -80,29 +83,30 @@ export const CACHE_GLYPHS = {
 }
 
 /**
- * A REVIEW-NYOM glifje. `⊙` U+2299 (CIRCLED DOT OPERATOR), MÉRVE 1 cella.
+ * The REVIEW TRACE glyph. `⊙` U+2299 (CIRCLED DOT OPERATOR), MEASURED at 1 cell.
  *
- * MIÉRT nem a `●`/`○`: azok MÁR foglaltak (queue-tagság ill. approve-oszlop) —
- * "egy jelentés, egy glif".
+ * WHY not `●`/`○`: those are ALREADY taken (queue membership and the approve
+ * column respectively) — "one meaning, one glyph".
  */
 export const REVIEW_TRACE_GLYPH = '⊙'
 
 /**
- * A cache tárolója. SESSION-idejű: egy TUI-példány élete.
+ * The cache's storage. SESSION-lifetime: the life of one TUI instance.
  *
- * `entries`: `"<pr>:<slot>"` → bejegyzés. A LAPOS kulcs szándékos: egy
- * PR-onkénti al-Map beszúrási sorrendtől függő ürességi állapotokat ad
- * (üres al-Map vs. nem-létező), amit minden olvasónak kezelnie kellene.
+ * `entries`: `"<pr>:<slot>"` → entry. The FLAT key is deliberate: a per-PR
+ * sub-Map would produce insertion-order-dependent emptiness states (empty
+ * sub-Map vs. non-existent) that every reader would have to handle.
  *
- * `reviewTrace`: PR-szám → forrás-halmaz. KÜLÖN a bejegyzésektől, mert MÁS a
- * természete: a nyom TÉNY a sessionről ("ezen a PR-on futott review"), nem
- * MÉRÉS — nem avul a main elmozdulásával, és az `R` sem törli.
+ * `reviewTrace`: PR number → source set. SEPARATE from the entries, because
+ * its nature is DIFFERENT: the trace is a FACT about the session ("a review
+ * ran on this PR"), not a MEASUREMENT — it doesn't go stale when main moves,
+ * and `R` doesn't clear it either.
  */
 export function createCache() {
-  // Az `aiFindings` a HIBRID réteg tárolója (PR-szám → { findings, applied }):
-  // a review VÁLASZÁBÓL eltárolt findingok. KÜLÖN az `entries`-től, mert nem
-  // mérés (nem avul a horgonnyal), és KÜLÖN a nyomtól, mert tartalma van —
-  // lásd a cacheStoreAiFindings fejét.
+  // `aiFindings` is the HYBRID layer's storage (PR number → { findings, applied }):
+  // findings stored FROM the review's RESPONSE. SEPARATE from `entries`, because
+  // it's not a measurement (doesn't go stale with the anchor), and SEPARATE from
+  // the trace, because it has content — see cacheStoreAiFindings's header.
   return { entries: new Map(), reviewTrace: new Map(), aiFindings: new Map() }
 }
 
@@ -110,22 +114,23 @@ const slotKey = (pr, slot) => `${pr}:${slot}`
 
 function assertSlot(slot) {
   if (!CACHE_SLOTS.has(slot)) {
-    // HANGOS: egy elírt slot-név NÉMÁN sosem-találó cache-t adna (minden
-    // megnyitás újramérne, és senki nem venné észre, hogy a cache halott).
+    // LOUD: a mistyped slot name would SILENTLY give a cache that never hits
+    // (every open would remeasure, and no one would notice the cache is dead).
     throw new Error(
-      `ismeretlen cache-slot: ${JSON.stringify(slot)} — érvényes: ${[...CACHE_SLOTS].join(', ')}`,
+      `unknown cache slot: ${JSON.stringify(slot)} — valid: ${[...CACHE_SLOTS].join(', ')}`,
     )
   }
 }
 
 /**
- * Az INVALIDÁLÁSI HORGONY egy sorra: a PR `updatedAt`-je + az `origin/main` SHA.
+ * The INVALIDATION ANCHOR for one row: the PR's `updatedAt` + the `origin/main` SHA.
  *
- * FAIL-CLOSED az adathiányra: ha bármelyik fél hiányzik, az `unknown: true`
- * marker kerül rá, és az `anchorsEqual` SOSEM ad egyezést — még önmagával sem.
- * MIÉRT: ha a hiányzó `updatedAt`-et csendben `""`-re vinnénk, két KÜLÖNBÖZŐ
- * időpontban mért bejegyzés horgonya EGYEZNE, tehát egy elavult diagnózist
- * "friss"-nek mutatnánk. Inkább újramérünk, mint hogy hazudjunk a frissességről.
+ * FAIL-CLOSED on missing data: if either side is missing, the `unknown: true`
+ * marker is set, and `anchorsEqual` NEVER reports a match — not even with
+ * itself. WHY: if we silently mapped a missing `updatedAt` to `""`, two
+ * entries measured at DIFFERENT times would have MATCHING anchors, so we'd
+ * show a stale diagnosis as "fresh". Better to remeasure than to lie about
+ * freshness.
  */
 export function cacheAnchor({ row, mainSha } = {}) {
   const updatedAt = typeof row?.updatedAt === 'string' && row.updatedAt !== '' ? row.updatedAt : null
@@ -135,7 +140,7 @@ export function cacheAnchor({ row, mainSha } = {}) {
   return anchor
 }
 
-/** Két horgony egyezése. ISMERETLEN horgony SOSEM egyezik (fail-closed). */
+/** Whether two anchors match. An UNKNOWN anchor NEVER matches (fail-closed). */
 export function anchorsEqual(a, b) {
   if (!a || !b) return false
   if (a.unknown === true || b.unknown === true) return false
@@ -143,9 +148,9 @@ export function anchorsEqual(a, b) {
 }
 
 /**
- * Egy MÉRÉS-INDÍTÁS bejegyzése. A `measuring` állapot ELŐBBRE való, mint a
- * stale: ha elindult az újramérés, a sor "mér…", nem "elavult" — a user épp azt
- * látja, ami történik.
+ * Recording a MEASUREMENT START. The `measuring` state takes PRECEDENCE over
+ * stale: once a remeasure has started, the row is "measuring…", not "stale" —
+ * the user sees exactly what's happening.
  */
 export function cacheMarkMeasuring(cache, pr, slot, { anchor } = {}) {
   assertSlot(slot)
@@ -154,12 +159,12 @@ export function cacheMarkMeasuring(cache, pr, slot, { anchor } = {}) {
 }
 
 /**
- * Egy MÉRÉS-EREDMÉNY bejegyzése. Három kimenet, három ág:
- *   - `value`   — mért eredmény (ez az egyetlen, ami "kész"),
- *   - `error`   — a mérő elesett: NINCS érték, tehát NEM kész,
- *   - `aborted` — a user megszakította: részeredmény nem diagnózis.
- * A hibás/abortált bejegyzés is BEKERÜL (a `measuring` állapotot le kell
- * zárni), csak nem minősül késznek.
+ * Recording a MEASUREMENT RESULT. Three outcomes, three branches:
+ *   - `value`   — the measured result (this is the only one that's "done"),
+ *   - `error`   — the measurer fell over: NO value, so NOT done,
+ *   - `aborted` — the user interrupted it: a partial result isn't a diagnosis.
+ * The errored/aborted entry is ALSO stored (the `measuring` state must be
+ * closed out), it just doesn't count as done.
  */
 export function cachePut(cache, pr, slot, { value = null, error = null, aborted = false, anchor } = {}) {
   assertSlot(slot)
@@ -173,17 +178,18 @@ export function cachePut(cache, pr, slot, { value = null, error = null, aborted 
   return cache
 }
 
-/** Egy bejegyzés, vagy `null`. A hívó a `cacheEntryState`-tel dönt róla. */
+/** An entry, or `null`. The caller decides what to do with it via `cacheEntryState`. */
 export function cacheGet(cache, pr, slot) {
   assertSlot(slot)
   return cache.entries.get(slotKey(pr, slot)) ?? null
 }
 
 /**
- * A TELJES cache-invalidálás (`R`). A review-nyomot NEM törli: az nem MÉRÉS,
- * hanem tény a sessionről. Ha törölnénk, egy MEGTÖRTÉNT review után az
- * attesztáció a rövidebb ("nem volt review") body-ra esne vissza — az
- * attesztáció akkor hazudna, csak a másik irányba.
+ * The FULL cache invalidation (`R`). Does NOT clear the review trace: that's
+ * not a MEASUREMENT, but a fact about the session. If we cleared it, after a
+ * review that ACTUALLY HAPPENED the attestation would fall back to the
+ * shorter ("no review happened") body — the attestation would then lie, just
+ * in the other direction.
  */
 export function cacheInvalidateAll(cache) {
   cache.entries.clear()
@@ -191,18 +197,19 @@ export function cacheInvalidateAll(cache) {
 }
 
 /**
- * EGY bejegyzés állapota a MOSTANI horgonyhoz mérve:
- *   `none`      — nincs bejegyzés, vagy van, de nincs benne mért érték
- *                 (hiba / abortálás): nincs mit "késznek" mutatni;
- *   `measuring` — fut a mérés;
- *   `fresh`     — van érték, és a horgony EGYEZIK;
- *   `stale`     — van érték, de a horgony elmozdult (vagy nem tudható).
+ * The state of ONE entry measured against the CURRENT anchor:
+ *   `none`      — no entry, or there is one but it has no measured value
+ *                 (error / abort): nothing to show as "done";
+ *   `measuring` — the measurement is running;
+ *   `fresh`     — has a value, and the anchor MATCHES;
+ *   `stale`     — has a value, but the anchor has moved (or is unknowable).
  */
 export function cacheEntryState(entry, anchor) {
   if (!entry) return 'none'
   if (entry.measuring === true) return 'measuring'
-  // A hibával/abortálással zárult mérésre "kész" pipát adni a legrosszabb
-  // hazugság: nincs mért eredmény. Ezek `none`-ok, tehát a sor újramérhető.
+  // Giving a "done" checkmark to a measurement that ended in error/abort would
+  // be the worst lie: there is no measured result. These are `none`s, so the
+  // row can be remeasured.
   if (entry.error !== null && entry.error !== undefined) return 'none'
   if (entry.aborted === true) return 'none'
   if (entry.value === null || entry.value === undefined) return 'none'
@@ -210,27 +217,29 @@ export function cacheEntryState(entry, anchor) {
 }
 
 /**
- * Egy PR állapota a listához. Default slot a `diagnosis` — a lista-jelző erről
- * a mérésről beszél (a review-reportnak külön jelzője van: a review-nyom).
+ * A PR's state for the list. The default slot is `diagnosis` — the list
+ * indicator speaks about this measurement (the review report has its own
+ * separate indicator: the review trace).
  */
 export function cacheState(cache, pr, anchor, slot = 'diagnosis') {
   return cacheEntryState(cacheGet(cache, pr, slot), anchor)
 }
 
 /**
- * REVIEW-NYOM jelölése: ezen a PR-on ebben a SESSIONBEN futott review.
+ * Marking a REVIEW TRACE: a review ran on this PR in THIS SESSION.
  *
- * A KORLÁT KIMONDVA: a hunk-session REPO-szintű, nem PR-szintű (`hunk session
- * comment list --repo <root>`), tehát a "melyik PR-hoz tartozik egy komment"
- * információ a hunkból NEM kérdezhető le. Ezt MI tartjuk nyilván — és csak
- * arról tudunk, amit MI indítottunk. Egy előző sessionben (vagy a hunk CLI-ből
- * kézzel) írt komment NEM látszik nyomként. Ezt a docs/next.md kimondja: nem
- * tehetünk úgy, mintha tudnánk valamit, amit nem.
+ * THE LIMITATION STATED PLAINLY: the hunk session is REPO-scoped, not
+ * PR-scoped (`hunk session comment list --repo <root>`), so the "which PR
+ * does a comment belong to" information CANNOT be queried from hunk. WE keep
+ * track of this ourselves — and we only know what WE started. A comment
+ * written in a previous session (or by hand from the hunk CLI) does NOT show
+ * up as a trace. docs/next.md states this: we can't act as if we know
+ * something we don't.
  */
 export function markReviewTrace(cache, pr, source) {
   if (!REVIEW_TRACE_SOURCES.has(source)) {
     throw new Error(
-      `ismeretlen review-nyom forrás: ${JSON.stringify(source)} — érvényes: ${[...REVIEW_TRACE_SOURCES].join(', ')}`,
+      `unknown review-trace source: ${JSON.stringify(source)} — valid: ${[...REVIEW_TRACE_SOURCES].join(', ')}`,
     )
   }
   const set = cache.reviewTrace.get(pr) ?? new Set()
@@ -239,20 +248,21 @@ export function markReviewTrace(cache, pr, source) {
   return cache
 }
 
-/** Van-e a SESSIONBEN indított review-nyom ezen a PR-on. */
+/** Whether there's a review trace started IN THIS SESSION on this PR. */
 export function hasReviewTrace(cache, pr) {
   return (cache.reviewTrace.get(pr)?.size ?? 0) > 0
 }
 
 /**
- * A NYOM FORRÁSAI ezen a PR-on, DETERMINISZTIKUS sorrendben.
+ * The TRACE's SOURCES on this PR, in DETERMINISTIC order.
  *
- * MIÉRT KELL a `hasReviewTrace` boolean-ja MELLETT: az attesztációs body
- * megnevezi a PROVENANCE-t ("claude -p AI-review" vs. "hunk inline review"), és
- * ez a szöveg a PR AUDIT-TRAILJÉBE megy fel. A nyers `Set` iterációs sorrendje a
- * BESZÚRÁS sorrendje, tehát ugyanaz a két nyom (ai + hunk) más sorrendben más
- * body-t adna — futásonként változó audit-szöveg, ok nélküli diff-zaj. A
- * REVIEW_TRACE_SOURCES deklarált sorrendjére szűrünk, ami fix.
+ * WHY THIS IS NEEDED BESIDE `hasReviewTrace`'s boolean: the attestation body
+ * names the PROVENANCE ("claude -p AI review" vs. "hunk inline review"), and
+ * this text goes into the PR's AUDIT TRAIL. A raw `Set`'s iteration order is
+ * INSERTION order, so the same two traces (ai + hunk) in a different order
+ * would produce a different body — audit text that changes run to run,
+ * pointless diff noise. We filter against REVIEW_TRACE_SOURCES's declared
+ * order, which is fixed.
  */
 export function reviewTraceSources(cache, pr) {
   const set = cache?.reviewTrace?.get(pr)
@@ -261,13 +271,14 @@ export function reviewTraceSources(cache, pr) {
 }
 
 /**
- * A cache-állapot LISTA-JELZŐJE — kompakt (1 cella) és DIMMELT.
+ * The cache state's LIST INDICATOR — compact (1 cell) and DIMMED.
  *
- * A DIMMELÉS a user 3. elve: "a sárga CSAK valódi figyelmeztetésre (költség,
- * blokkolók)". A cache-státusz metaadat a mérésről, nem figyelmeztetés — még az
- * elavult sem: az nem hibát jelent, hanem azt, hogy újra kell mérni.
+ * The dimming follows the user's 3rd principle: "yellow is ONLY for genuine
+ * warnings (cost, blockers)". The cache status is metadata about the
+ * measurement, not a warning — not even stale: that doesn't signal an error,
+ * just that a remeasure is needed.
  *
- * A `none` állapot `null`-t ad: nem paddolunk üresen.
+ * The `none` state returns `null`: we don't pad with emptiness.
  */
 export function cacheIndicatorFlag(state) {
   const glyph = CACHE_GLYPHS[state]
@@ -276,70 +287,73 @@ export function cacheIndicatorFlag(state) {
 }
 
 /**
- * A review-nyom LISTA-JELZŐJE. Nyom nélkül `null` (a default sor nem kap jelet).
+ * The review trace's LIST INDICATOR. `null` without a trace (the default row
+ * gets no mark).
  *
- * A SZÍN `whiteBright` — KÉT LÉPÉSBEN jutottunk ide, a user méréseiből: a `gray`
- * "alig látható" volt, a `cyan` pedig "lehet még élénkebb". A `gray` a
- * METAADAT-jelzők színe (cache-státusz, stacked, draft), és a review-nyom NEM
- * metaadat: azt mondja, hogy ezen a PR-on VAN mit megnézni, ami a lista
- * legcselekvésre-hívóbb információja.
+ * The COLOR is `whiteBright` — reached in TWO STEPS, from the user's
+ * measurements: `gray` was "barely visible", and `cyan` "could be even more
+ * vivid". `gray` is the color of METADATA indicators (cache status, stacked,
+ * draft), and the review trace is NOT metadata: it says there IS something to
+ * look at on this PR, which is the list's most action-worthy information.
  *
- * MIÉRT `whiteBright`, ÉS NEM `white`: a sima `white` a terminál DEFAULT
- * szövegszíne — egy default-színű jel nem "élénkebb", csak jelöletlen. A
- * `whiteBright` a fényes ANSI-variáns (chalk named color, az Ink `colorize`-ja
- * a `color in chalk` próbán átengedi), tehát a sor többi eleménél TÉNYLEGESEN
- * világosabb.
+ * WHY `whiteBright`, AND NOT `white`: plain `white` is the terminal's DEFAULT
+ * text color — a default-colored mark isn't "more vivid", just unmarked.
+ * `whiteBright` is the bright ANSI variant (a chalk named color, passes Ink's
+ * `colorize`'s `color in chalk` check), so it's ACTUALLY lighter than the
+ * rest of the row's elements.
  *
- * A SZÍNES CSALÁDOK KI VANNAK ZÁRVA: a sárga a valódi figyelmeztetésé (a user 3.
- * elve: költség, blokkolók), a zöld az approve-oszlopé, a cyan a dep- és
- * approve-olhatod-jelzéseké — a fehér az EGYETLEN szabad, kiemelő érték.
+ * THE COLOR FAMILIES ARE EXCLUDED: yellow belongs to genuine warnings (the
+ * user's 3rd principle: cost, blockers), green to the approve column, cyan to
+ * the dep- and can-approve indicators — white is the ONLY free, standout value.
  *
- * A GLIF VÁLTOZATLAN (`⊙`): egy tömörebb jel (pl. `◉` U+25C9) látványosabb lenne,
- * de a SZÉLESSÉGE nem mért — a geometric-shapes blokk java "ambiguous width",
- * ami CJK-kontextusban 2 cellára ugrik. A user NÉGYSZER jelentette be az
- * oszlop-csúszást, aminek pontosan az a gyökere, hogy valaki egy glif
- * szélességét megtippelte. Glifet CSAK mérés után cserélünk; a szín ingyen van.
+ * THE GLYPH IS UNCHANGED (`⊙`): a denser mark (e.g. `◉` U+25C9) would be more
+ * eye-catching, but its WIDTH isn't measured — most of the geometric-shapes
+ * block is "ambiguous width", which jumps to 2 cells in a CJK context. The
+ * user reported the column-shift FOUR TIMES, and its root cause was exactly
+ * someone guessing a glyph's width. We only swap a glyph AFTER measuring; the
+ * color is free.
  */
 export function reviewTraceFlag(has) {
   return has === true ? { label: REVIEW_TRACE_GLYPH, color: 'whiteBright' } : null
 }
 
 
-// --- Az AI-review VÁLASZ-FINDINGJAI: a cache-állapotgép hibrid szelete ---
+// --- The AI review's RESPONSE FINDINGS: the cache state machine's hybrid slice ---
 //
-// Ezek MA a hibrid-findings szekcióban laktak, de cache-állapotot kezelnek
-// (a `cache.aiFindings` Map-et), ezért a cache-modul a helyük.
+// These used to live in the hybrid-findings section, but they manage cache
+// state (the `cache.aiFindings` Map), so the cache module is their home.
 /**
- * A VÁLASZ-FINDINGOK TÁROLÁSA — PR-ra kulcsolva, az `applied` flaggel.
+ * STORING the RESPONSE FINDINGS — keyed by PR, with the `applied` flag.
  *
- * KÜLÖN a mérés-bejegyzésektől (`entries`) és a nyomtól (`reviewTrace`), mert
- * MÁS a természete: a finding KIFIZETETT TÉNY (a költés megtörtént), nem
- * mérés — nem avul a main elmozdulásával, és az `R` sem dobhatja el. Ha az
- * `R` törölné, a "review lefutott, minden elveszett" kár egy reflexszerű
- * refresh-sel újra előállna.
+ * SEPARATE from the measurement entries (`entries`) and the trace
+ * (`reviewTrace`), because its nature is DIFFERENT: a finding is a PAID-FOR
+ * FACT (the spend happened), not a measurement — it doesn't go stale when
+ * main moves, and `R` can't drop it either. If `R` cleared it, the "review
+ * ran, everything's lost" harm would recur from a reflexive refresh.
  */
 export function cacheStoreAiFindings(cache, pr, findings) {
   if (!Array.isArray(findings)) {
-    throw new Error(`a válasz-findingok nem tömbként érkeztek: ${JSON.stringify(findings)}`)
+    throw new Error(`response findings did not arrive as an array: ${JSON.stringify(findings)}`)
   }
   cache.aiFindings.set(pr, { findings, applied: false })
   return cache
 }
 
-/** A PR eltárolt válasz-findingjai (`{ findings, applied }`), vagy null. */
+/** The PR's stored response findings (`{ findings, applied }`), or null. */
 export function cacheAiFindings(cache, pr) {
   return cache?.aiFindings?.get(pr) ?? null
 }
 
 /**
- * A betöltés megtörtént: az `applied` flag áll, ÉS a CÉLSESSION azonosítója is
- * rögzül. EZ az idempotencia-kapu — de a kapu SESSION-IDENTITÁSHOZ kötött, nem
- * csak a PR-hoz (a user 5/3-as lelete): a hunk `q`-ja a sessiont is elviszi,
- * és az `applied` egy HALOTT sessionre nézve hazug "kész"-t mondana — az új,
- * üres session betöltés nélkül maradna, a note-ok "eltűnnének".
+ * The load happened: the `applied` flag is set, AND the TARGET SESSION's
+ * identifier is also recorded. THIS is the idempotency gate — but the gate is
+ * tied to SESSION IDENTITY, not just to the PR (the user's 5/3 finding): the
+ * hunk's `q` takes the session down with it, and `applied` would falsely say
+ * "done" against a DEAD session — the new, empty session would go without a
+ * load, and the notes would "disappear".
  *
- * A `sessionId` null/undefined esetén NEM íródik: a guard ilyenkor fail-safe
- * (nem duplikál — lásd answerFindingsNeedApply).
+ * NOT written when `sessionId` is null/undefined: the guard is fail-safe in
+ * that case (doesn't duplicate — see answerFindingsNeedApply).
  */
 export function cacheMarkAiFindingsLoaded(cache, pr, sessionId) {
   const cur = cache.aiFindings.get(pr)
@@ -354,23 +368,25 @@ export function cacheMarkAiFindingsLoaded(cache, pr, sessionId) {
 }
 
 /**
- * KELL-E BETÖLTENI a cache-elt válasz-findingokat a megnyitáskor — a
- * SESSION-IDENTITÁSHOZ kötött guard TISZTA döntése.
+ * WHETHER TO LOAD the cached response findings on open — the PURE decision of
+ * the guard tied to SESSION IDENTITY.
  *
- * A NÉGY ÁG, kimondva:
- *   - nincs pending / üres findings → NEM (nincs mit);
- *   - még nem applied → IGEN (az első betöltés);
- *   - applied, és a rögzített célsession MA IS ÉL (azonos id) → NEM — ez a
- *     "nem duplikál élő sessionben" invariáns (ismételt Enter/r sem duplikál);
- *   - applied, de a célsession MEGSZŰNT vagy MÁS session él → IGEN: az új
- *     sessionben a note-ok nincsenek ott, a másolatból újratöltjük őket
- *     (a user 5/3-as lelete — az újbóli `r` üres review-t adott).
+ * THE FOUR BRANCHES, stated plainly:
+ *   - no pending / empty findings → NO (nothing to load);
+ *   - not yet applied → YES (the first load);
+ *   - applied, and the recorded target session IS STILL ALIVE (same id) → NO
+ *     — this is the "doesn't duplicate in a live session" invariant (a
+ *     repeated Enter/r doesn't duplicate either);
+ *   - applied, but the target session HAS ENDED or ANOTHER session is live →
+ *     YES: the notes aren't there in the new session, so we reload them from
+ *     the copy (the user's 5/3 finding — a repeated `r` produced an empty
+ *     review).
  *
- * FAIL-SAFE ÁG: applied, de NINCS rögzített sessionId (a betöltéskor a session
- * list nem volt mérhető) → NEM töltünk újra. A két hibairány közül a duplikáció
- * a rosszabb (a user a hunkban KÉTSZER látná ugyanazt a findingot, és a
- * feltöltés is duplán vinné fel); a kihagyás legfeljebb a régi, ismert
- * viselkedés marad.
+ * FAIL-SAFE BRANCH: applied, but NO recorded sessionId (the session list
+ * wasn't measurable at load time) → we do NOT reload. Of the two failure
+ * directions, duplication is worse (the user would see the same finding
+ * TWICE in the hunk, and the upload would carry it up twice too); skipping
+ * at worst leaves the old, known behavior.
  */
 export function answerFindingsNeedApply(pending, liveSessionId) {
   if (!pending || !Array.isArray(pending.findings) || pending.findings.length === 0) return false
@@ -380,12 +396,12 @@ export function answerFindingsNeedApply(pending, liveSessionId) {
 }
 
 /**
- * A cache-elt AI-findingok EXPLICIT ELVETÉSE (a dupla-`x` második nyomása).
+ * EXPLICIT DISCARD of cached AI findings (the second press of double-`x`).
  *
- * CSAK a findingokat dobja el — a REVIEW-NYOM (reviewTraces) MARAD: a review
- * megtörtént és a költés valós tény, az elvetés csak az eredmény-példányt
- * takarítja el. Az újraindítás előfeltétele pont ez az elvetés (lásd az `r`
- * életciklusát): szándékos súrlódás a véletlen dupla-költés ellen.
+ * Drops ONLY the findings — the REVIEW TRACE (reviewTraces) STAYS: the review
+ * happened and the spend is a real fact, the discard only clears up the
+ * result instance. This very discard is the precondition for restarting (see
+ * `r`'s lifecycle): deliberate friction against accidental double-spending.
  */
 export function cacheDiscardAiFindings(cache, pr) {
   cache?.aiFindings?.delete(pr)
@@ -393,24 +409,25 @@ export function cacheDiscardAiFindings(cache, pr) {
 }
 
 /**
- * A MÉG BE NEM TÖLTÖTT, KIFIZETETT válasz-findingokat hordozó PR-ok.
+ * PRs carrying PAID-FOR response findings that are NOT YET LOADED.
  *
- * FIGYELEM — MA NINCS FOGYASZTÓJA A TUI-BAN (wf31/9). Eredetileg a
- * kilépés-guard bemenete volt (nema-veszteseg-1): a findings-cache akkor CSAK a
- * process memóriájában élt, tehát egy néma `q` tényleg eldobta a kifizetett
- * eredményt. A disk-cache (review-store) óta ez nem áll: a findingok a `/tmp`-be
- * mentve MEGMARADNAK, és az indulás visszaolvassa őket — a guard így nem
- * veszteséget előzött meg, hanem a cache működéséről tájékoztatott. A user
- * döntése szerint a cache automatikus default, amiről nem kell szólni, ezért a
- * pending-ág kivezetve.
+ * NOTE — HAS NO CONSUMER IN THE TUI TODAY (wf31/9). Originally it was the
+ * exit guard's input (silent-loss-1): back then the findings cache lived
+ * ONLY in process memory, so a silent `q` really did discard the paid-for
+ * result. Since the disk cache (review-store), this no longer holds: the
+ * findings are saved to `/tmp` and PERSIST, and startup reads them back — so
+ * the guard was no longer preventing loss, just reporting on the cache's
+ * operation. Per the user's decision the cache is an automatic default that
+ * needs no announcement, so the pending branch was retired.
  *
- * MIÉRT MARAD MÉGIS: tiszta, tesztelt selector a cache-állapot fölött ("van-e
- * félbehagyott, kifizetett munka"), aminek jövőbeli fogyasztója lehet (pl. egy
- * összegző jelzés a fejlécben). Törlésre akkor érdemes, ha ez nem valósul meg.
+ * WHY IT STAYS ANYWAY: it's a clean, tested selector over cache state ("is
+ * there unfinished, paid-for work"), which may get a future consumer (e.g. a
+ * summary indicator in the header). Worth deleting once that doesn't
+ * materialize.
  *
- * Az `applied !== true` + nem-üres findings a mérce: az applied példány már a
- * hunkban van (vagy a session-identitás-guard dönt róla megnyitáskor), az üres
- * lista pedig nem veszteség.
+ * `applied !== true` plus non-empty findings is the yardstick: the applied
+ * instance is already in the hunk (or the session-identity guard decides on
+ * it at open time), and an empty list isn't a loss.
  */
 export function cacheUnappliedAiFindingPrs(cache) {
   const out = []

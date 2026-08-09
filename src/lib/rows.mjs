@@ -1,64 +1,68 @@
-// tuipr — ROWS: a queue-modell és a sor-layout.
+// tuipr — ROWS: the queue model and row layout.
 //
-// `queue --json` → megjelenítendő sorok (tranzitív stackelés, jelzők,
-// státusz-mark), plusz a sor-szélesség / cím-büdzsé mérése.
+// `queue --json` → displayable rows (transitive stacking, flags, status
+// mark), plus measuring row width / the title budget.
 //
-// RÉTEGREND: lefelé importál (layout: cella-mérés; cache: a lista-jelző és a
-// review-nyom glifjei). SEMMIT nem importál a core-ból vagy felette.
+// LAYER ORDER: imports downward (layout: cell measurement; cache: the list
+// indicator and review-trace glyphs). Imports NOTHING from core or above it.
 //
-// A MARKS/RMARKS konstansok ITT laknak, mert az EGYETLEN fogyasztójuk a
-// buildRows/flagsFor ág. (A core-ban a deklaráció és az `export` a fájl két
-// végén állt szét — a névnek egy helyen kell élnie a használatával.)
+// The MARKS/RMARKS constants live HERE, because their ONLY consumer is the
+// buildRows/flagsFor branch. (In core, the declaration and the `export` sat
+// apart at the two ends of the file — the name needs to live in one place
+// with its usage.)
 import { cacheIndicatorFlag, reviewTraceFlag } from './cache.mjs'
 import { displayWidth } from './layout.mjs'
 
-// --- A státusz-feliratok és színek (a lista-nézet queue_mark_def párja) -----
+// --- The status labels and colors (the list view's queue_mark_def counterpart) --
 //
-// Egy forrás a TUI oldalán: a felirat és a szín state-enként. A szélességet itt
-// NEM kell deklarálni — az Ink Box/Text a layoutot maga méri, szemben a bash
-// printf-fel, ami bájtban számol.
-// IKON-SZEMANTIKA: a felfele nyíl (⬆️) KIZÁRÓLAG a stackelést jelenti, és
-// egyedül a flagsFor() stacked ágán szerepel. Korábban a queue-mark is ⬆️ volt
-// ("⬆️ in queue"), és mivel a next MINDEN sora queue-tag, a nyíl minden soron
-// ott állt — tehát nem különböztetett meg semmit. A queue-tagság ezért semleges
-// telt kört (● U+25CF, 1 cella) kap; a telt/üres kontraszt szándékos: telt =
-// benne van a next-ben, üres (○, RMARKS) = approve-ra vár.
+// One source on the TUI side: the label and the color per state. The width
+// does NOT need to be declared here — Ink's Box/Text measures the layout
+// itself, unlike bash's printf, which counts in bytes.
+// ICON SEMANTICS: the up arrow (⬆️) EXCLUSIVELY means stacking, and appears
+// only on flagsFor()'s stacked branch. It used to also be the queue mark
+// ("⬆️ in queue"), and since every row of next is queue-tagged, the arrow sat
+// on every row — so it distinguished nothing. Queue membership therefore gets
+// a neutral filled circle (● U+25CF, 1 cell); the filled/empty contrast is
+// deliberate: filled = it's in the next queue, empty (○, RMARKS) = awaiting
+// approval.
 const MARKS = {
   queue: { label: '● in queue', color: 'green' },
   conflict: { label: '⚠️ conflict', color: 'yellow' },
   blocked: { label: '⛔ blocked', color: 'red' },
   missing: { label: '❓ missing', color: 'yellow' },
-  draft: { label: 'draft (kimarad)', color: 'gray' },
-  // (wf31/25) OPTIMISTA VÉGÁLLAPOTOK — a MI akciónk eredménye, nem a GitHub
-  // lekérdezéséből.
+  draft: { label: 'draft (skipped)', color: 'gray' },
+  // (wf31/25) OPTIMISTIC END STATES — the result of OUR OWN action, not from
+  // a GitHub query.
   //
-  // MIÉRT KELL (mért lelet, a user #895-ös esete): a `gh pr merge` exit 0-val
-  // visszatért, a `reload()` LEFUTOTT, és a PR MÉGIS ott maradt a listán — mert a
-  // GitHub GraphQL-INDEXE aszinkron frissül, tehát a merge utáni MÁSODPERCEKBEN a
-  // `gh pr list --state open` MÉG a régi állapotot adja. A user így egy olyan sort
-  // látott „in queue"-ként, amit ő maga mergelt le másodpercekkel korábban.
+  // WHY THIS IS NEEDED (a measured finding, the user's #895 case): `gh pr
+  // merge` returned exit 0, `reload()` RAN, and the PR STILL stayed on the
+  // list — because GitHub's GraphQL INDEX updates asynchronously, so in the
+  // SECONDS after the merge, `gh pr list --state open` STILL gives the old
+  // state. So the user saw a row as "in queue" that they themselves had
+  // merged seconds earlier.
   //
-  // A MEGOLDÁS OPTIMISTA, ÉS EZ SZÁNDÉKOS: a saját akciónk eredményét ISMERJÜK
-  // (exit 0), tehát nem kérdezzük vissza attól az API-tól, ami épp késik. A user
-  // döntése: "ok legyen optimistic, de ne kivegyük a listából, hanem legyen merged
-  // az állapota és dimmeld le. R reload-dal úgyis ki tudja szedni a user."
+  // THE FIX IS OPTIMISTIC, AND THIS IS DELIBERATE: we KNOW the result of our
+  // own action (exit 0), so we don't ask back the API that's currently
+  // lagging. The user's decision: "ok, make it optimistic, but don't remove
+  // it from the list, instead set its state to merged and dim it. The user
+  // can clear it out with reload anyway."
   //
-  // MIÉRT NEM VESSZÜK KI A LISTÁBÓL: a sor eltűnése a kurzort is elmozdítaná, és a
-  // user elveszítené a kontextust ("mi történt?"). A dimmelt, `merged` sor
-  // KIMONDJA az eredményt, és a helyén marad, amíg a user (vagy a poll) nem
-  // frissít.
+  // WHY WE DON'T REMOVE IT FROM THE LIST: the row disappearing would also
+  // move the cursor, and the user would lose context ("what happened?"). The
+  // dimmed `merged` row STATES the outcome, and stays in place until the
+  // user (or the poll) refreshes.
   merged: { label: '✔ merged', color: 'gray' },
 }
 
 const RMARKS = {
   approved: { label: '✔ approved', color: 'green' },
   changes: { label: '✗ changes requested', color: 'red' },
-  can_approve: { label: '○ approve-olhatod', color: 'cyan' },
-  waiting: { label: '○ approve vár', color: 'gray' },
+  can_approve: { label: '○ you can approve', color: 'cyan' },
+  waiting: { label: '○ awaiting approval', color: 'gray' },
 }
 
 
-/** A queue --json egy sorának rmark-kulcsa (approve-oszlop), vagy null. */
+/** The rmark key (approve column) for a row of queue --json, or null. */
 function rmarkKey(r) {
   if (r.stackedOn !== null && r.stackedOn !== undefined) return null
   if (r.isDraft || r.state === 'draft') return null
@@ -68,40 +72,42 @@ function rmarkKey(r) {
 }
 
 /**
- * A META-JELZŐK (review-nyom + cache-státusz) a flag-sáv VÉGÉRE fűzve.
+ * The META-FLAGS (review trace + cache status) are appended to the END of
+ * the flag band.
  *
- * A SORREND NEM ÖNKÉNYES: a tartalmi jelzők (dep / conflict / landolható) a
- * DÖNTÉST hordozzák, a meta-jelzők csak a mérésről/review-ról szóló metaadat. A
- * metaadat nem tolhatja jobbra azt, amiért a user a sort olvassa — és keskeny
- * terminálon a tail-degradáció is a VÉGÉT dobja el először, tehát a
- * legkevésbé fontos jelző esik ki elsőként.
+ * THE ORDER IS NOT ARBITRARY: the content flags (dep / conflict / landable)
+ * carry the DECISION, the meta-flags are just metadata about the
+ * measurement/review. Metadata must not push right the thing the user reads
+ * the row for — and on a narrow terminal, tail degradation also drops the
+ * END first, so the least important flag falls off first.
  */
 /**
- * (wf31/72) A FUTÓ AKCIÓ SOR-JELZŐJE — a hátrahagyott PR-on.
+ * (wf31/72) THE ROW FLAG FOR A RUNNING ACTION — on the row left behind.
  *
- * A user kérése: "a táblázatban is jelenjen meg a pending approve, hogy amikor
- * elnavigálok, lássam, hogy a régi sor pending."
+ * The user's request: "the pending approve should also show up in the table,
+ * so when I navigate away, I can see that the old row is pending."
  *
- * MIÉRT KELL EGYÁLTALÁN: a pending eddig KIZÁRÓLAG a legendben élt (wf31/45), ami
- * a KÉPERNYŐ ALJÁN, a kurzortól függetlenül áll. Amíg a navigáció tiltva volt a
- * futó akció alatt, ez elég volt — a user ott állt, ahol az akció futott. A
- * wf31/72 óta viszont EL LEHET NAVIGÁLNI, és onnantól a legend már nem mondja meg,
- * MELYIK soron fut: a jelzésnek a SORHOZ kell tapadnia.
+ * WHY THIS IS NEEDED AT ALL: until now, pending lived EXCLUSIVELY in the
+ * legend (wf31/45), which sits at the BOTTOM OF THE SCREEN, independent of
+ * the cursor. As long as navigation was disabled during a running action,
+ * this was enough — the user was standing right where the action ran. But
+ * since wf31/72 YOU CAN NAVIGATE AWAY, and from then on the legend no longer
+ * says WHICH row it's running on: the indicator needs to stick to the ROW.
  *
- * A CÍMKE MEGNEVEZI AZ AKCIÓT (`⏳ approve…`), nem csak azt, hogy "dolgozik": egy
- * hátrahagyott soron a "min dolgozik" a lényegi kérdés — a user épp azért ment el,
- * mert mással foglalkozik.
+ * THE LABEL NAMES THE ACTION (`⏳ approve…`), not just that it's "working": on
+ * a row left behind, "what's it working on" is the real question — the user
+ * left precisely because they're dealing with something else.
  *
- * A SZÍN CYAN, mint a review-spinneré: mindkettő FOLYAMATBAN lévő munka jelzése,
- * és a projekt színkódja szerint a cyan az aktivitásé (a sárga a figyelmeztetésé,
- * a zöld az approve-oszlopé).
+ * THE COLOR IS CYAN, like the review spinner's: both signal work IN
+ * PROGRESS, and per the project's color code cyan is for activity (yellow is
+ * for warnings, green is for the approve column).
  */
 const PENDING_ROW_LABELS = {
   a: '⏳ approve…',
   m: '⏳ merge…',
-  f: '⏳ review feltöltése…',
+  f: '⏳ uploading review…',
   d: '⏳ hunk…',
-  s: '⏳ stackelés…',
+  s: '⏳ stacking…',
 }
 
 export function pendingActionFlag(key) {
@@ -110,14 +116,16 @@ export function pendingActionFlag(key) {
 }
 
 function appendMetaFlags(flags, { cacheState: state, hasTrace, spinnerFrame, pendingKey }) {
-  // A FUTÓ AKCIÓ A META-JELZŐK ELEJÉN: időben ez a legfrissebb tény a sorról, és
-  // a tail-degradáció a VÉGÉT dobja el először — a pending tehát a leghosszabb
-  // ideig marad látható. (Ugyanaz az érv, amiért a spinner is elöl áll.)
+  // THE RUNNING ACTION AT THE FRONT OF THE META-FLAGS: in time this is the
+  // freshest fact about the row, and tail degradation drops the END first —
+  // so pending stays visible the LONGEST. (Same argument as why the spinner
+  // is also at the front.)
   const pending = pendingActionFlag(pendingKey)
   if (pending) flags.push(pending)
-  // A SPINNER ELÖL a meta-jelzők között: a MOST zajló aktivitás időben
-  // elsőbb, mint a múltbeli nyom/mérés-státusz. 1 cellás Braille (MÉRVE), a
-  // ticker frame-indexével — külön timer NINCS (a 4. pont kikötése).
+  // THE SPINNER UP FRONT among the meta-flags: activity happening RIGHT NOW
+  // comes before the past trace/measurement status, in time. A 1-cell
+  // Braille glyph (MEASURED), driven by the ticker's frame index — there is
+  // NO separate timer (point 4's stipulation).
   if (spinnerFrame !== undefined && spinnerFrame !== null) flags.push(reviewSpinnerFlag(spinnerFrame))
   const trace = reviewTraceFlag(hasTrace)
   if (trace) flags.push(trace)
@@ -127,125 +135,135 @@ function appendMetaFlags(flags, { cacheState: state, hasTrace, spinnerFrame, pen
 }
 
 /**
- * A sor végi jelzők (dep / conflict / drift / landolható / stacked).
+ * The row-end flags (dep / conflict / drift / landable / stacked).
  *
- * (wf31/52) AZ `axis: 'mark'` JELÖLÉS — A CONFLICT-TENGELY JELZŐI A MARK MELLÉ.
+ * (wf31/52) THE `axis: 'mark'` TAG — THE CONFLICT-AXIS FLAGS NEXT TO THE MARK.
  *
- * A user lelete: a sor `⚠️ conflict · ○ approve vár (forrás?)` alakban áll, "ahol a
- * »forrás?« a conflictra vonatkozik" — de az approve-oszlop MÖGÉ került, mert a
- * renderelő sorrendje mark → rmark → flags, és a `(forrás?)` a flags-ben volt. A
- * szem így az approve-hoz olvassa: mintha a jóváhagyás várna a forrásra.
+ * The user's finding: the row reads `⚠️ conflict · ○ awaiting approval
+ * (source?)`, "where '(source?)' refers to the conflict" — but it ended up
+ * BEHIND the approve column, because the renderer's order is mark → rmark →
+ * flags, and `(source?)` was in flags. So the eye reads it as belonging to
+ * approve: as if the approval were waiting on the source.
  *
- * AZ `axis: 'mark'`-os jelzőket a renderelő a MARK UTÁN, az rmark ELŐTT rajzolja —
- * a conflict-tengely (`⚡dep`, `(forrás?)`, `⛔ conflict #N`) így egy blokkban áll
- * azzal a markkal, amiről beszél. A jelölés ADAT, nem stílus: a bash lista-nézet
- * ugyanezt a csoportosítást a saját sorrendjével oldja meg.
+ * The renderer draws `axis: 'mark'` flags AFTER the mark, BEFORE the rmark —
+ * so the conflict axis (`⚡dep`, `(source?)`, `⛔ conflict #N`) sits in one
+ * block with the mark it's talking about. The tag is DATA, not style: the
+ * bash list view solves the same grouping with its own ordering.
  *
- * A `measured` A MÉRÉS TÉNYE (van-e diagnózis ezen a PR-on) — lásd a 3-as ág
- * indoklását: a kérdőjel nem élheti túl a saját válaszát.
+ * `measured` is THE FACT OF MEASUREMENT (is there a diagnosis on this PR) —
+ * see the reasoning on branch 3: the question mark must not outlive its own
+ * answer.
  */
 function flagsFor(r, { measured = false } = {}) {
   const flags = []
   if (r.stackedOn !== null && r.stackedOn !== undefined) {
-    flags.push({ label: `⬆️ stacked #${r.stackedOn} után`, color: 'gray' })
-    // A LÁNC-DIAGNÓZIS a stacked soron jelenik meg (a main-bázisú sor definíció
-    // szerint 0 mély és nem lehet körben). A sorrend NEM önkényes: a CIKLUS
-    // előbb áll, mert ott a mélység nem is értelmezhető — a "túl mély" mellette
-    // félrevezető lenne. A feliratoknak EGYEZNIE kell a bash queue_flag_def
-    // "stackcycle"/"toodeep" ágaival, különben a lista és a TUI MÁST mond
-    // ugyanarról a sorról.
+    flags.push({ label: `⬆️ stacked after #${r.stackedOn}`, color: 'gray' })
+    // THE CHAIN DIAGNOSIS shows up on the stacked row (a main-based row is by
+    // definition 0 deep and can't be part of a cycle). THE ORDER IS NOT
+    // ARBITRARY: CYCLE comes first, because there depth isn't even meaningful
+    // — "too deep" next to it would be misleading. The labels MUST MATCH the
+    // bash queue_flag_def's "stackcycle"/"toodeep" branches, otherwise the
+    // list and the TUI would say DIFFERENT things about the same row.
     if (r.stackCycle === true) {
-      flags.push({ label: '⚠ körkörös', color: 'red' })
+      flags.push({ label: '⚠ circular', color: 'red' })
     } else if (r.stackTooDeep === true) {
-      // A mélységet KIÍRJUK: a puszta "túl mély" nem mondja meg, mennyivel — és
-      // a user döntése (kivárom / szétvágom a láncot) ettől függ.
-      flags.push({ label: `⚠ túl mély (${r.stackDepth ?? '?'} szint)`, color: 'yellow' })
+      // WE PRINT the depth: plain "too deep" doesn't say by how much — and
+      // the user's decision (wait it out / split the chain) depends on it.
+      flags.push({ label: `⚠ too deep (${r.stackDepth ?? '?'} levels)`, color: 'yellow' })
     }
     return flags
   }
-  // A klasszifikáció a (b) modellből jön: 2 = soft dep, 3 = conflict ismeretlen
-  // forrással, 4 = dep-fájlt is érintő conflict (NE oldd fel).
-  // NINCS szóköz a ⚡ után — a bash queue_flag_def "dep" ágával EGYEZŐEN, és nem
-  // elírásból. A ⚡ (U+26A1) két cellát LÉPTET (MÉRVE: advance=2, ugyanannyi,
-  // mint a ⛔/🚀), tehát a layout helyes — a `·` szeparátor oszlopa mérve nem
-  // csúszik. A ⚡ viszont text-presentation jel (nincs VS16, Emoji_Presentation
-  // hamis), így a foglalt 2 cellába a legtöbb font keskenyen rajzolja: a második
-  // cella üresen látszik, és a literál szóköz mellé állva ez KÉT résnek
-  // olvasódik. Pontosan ezt jelentette be a user. A foglalt cella maga a
-  // szeparátor. A ⛔/🚀/⬆️ emoji-presentation, azokat a user nem jelentette be —
-  // ott a szóköz MEGMARAD (célzott javítás, lásd test/next-tui.test.ts).
+  // Classification comes from the (b) model: 2 = soft dep, 3 = conflict with
+  // an unknown source, 4 = conflict that also touches a dep file (do NOT
+  // resolve it).
+  // NO SPACE after ⚡ — MATCHING the bash queue_flag_def's "dep" branch, and
+  // not a typo. ⚡ (U+26A1) STEPS two cells (MEASURED: advance=2, same as
+  // ⛔/🚀), so the layout is correct — the `·` separator column doesn't shift
+  // when measured. ⚡ is, however, a text-presentation glyph (no VS16,
+  // Emoji_Presentation is false), so most fonts draw it narrow within the
+  // reserved 2 cells: the second cell looks empty, and standing next to a
+  // literal space this reads as TWO gaps. That's exactly what the user
+  // reported. The reserved cell IS the separator itself. ⛔/🚀/⬆️ are
+  // emoji-presentation, the user didn't report those — there the space STAYS
+  // (a targeted fix, see test/next-tui.test.ts).
   if (r.classification === 2 && r.dep) flags.push({ label: `⚡dep #${r.dep}`, color: 'cyan', axis: 'mark' })
-  // A 3-as eset felirata korábban "(main-drift)" volt, és MÉRT tényt állított,
-  // amit a queue nem tud (itt csak labelek + fájl-metszet van). Az éles #911
-  // pontosan ezen bukott meg: a main-nel MERGEABLE volt, a conflict forrása négy
-  // queue-belső PR. A kérdőjel azt jelenti: a forrás még nem ismert — a 'c'
-  // billentyű (`tuipr conflict`) megméri. A feliratnak EGYEZNIE kell a bash
-  // queue_flag_def "unmeasured" ágával.
-  // (wf31/52) A KÉRDŐJEL NEM ÉLHETI TÚL A SAJÁT VÁLASZÁT. A user lelete:
-  // "megmértem a forrást c-vel, és egy pipa megjelent, de a forrás kérdés nem tűnt
-  // el" — a sor egyszerre mondta, hogy MÉRVE van (`✓`) és hogy a forrás ISMERETLEN.
+  // Case 3's label used to be "(main-drift)", and it CLAIMED a MEASURED fact
+  // that the queue doesn't know (here there are only labels + the file
+  // intersection). The live #911 case failed on exactly this: it was
+  // MERGEABLE with main, the conflict's source was four PRs within the
+  // queue. The question mark means: the source isn't known yet — the 'c' key
+  // (`tuipr conflict`) measures it. The label MUST MATCH the bash
+  // queue_flag_def's "unmeasured" branch.
+  // (wf31/52) THE QUESTION MARK MUST NOT OUTLIVE ITS OWN ANSWER. The user's
+  // finding: "I measured the source with c, and a checkmark appeared, but the
+  // source question didn't go away" — the row said at once that it WAS
+  // MEASURED (`✓`) and that the source was UNKNOWN.
   //
-  // AZ OK: a `classification` a queue-modellből jön (a bash a CÍMKÉKBŐL és a
-  // fájl-metszetből számolja), a mérés eredménye viszont a session-cache-ben él —
-  // a `3`-as osztály tehát a mérés után is `3` marad, mert a bemenete nem változott.
-  // A `dep` sem segít: az a FÁJL-METSZET dep-je, nem a MÉRT culprit.
+  // THE REASON: `classification` comes from the queue model (bash computes it
+  // from the LABELS and the file intersection), while the measurement result
+  // lives in the session cache — so class `3` stays `3` even after
+  // measuring, because its input didn't change. `dep` doesn't help either:
+  // that's the FILE-INTERSECTION's dep, not the MEASURED culprit.
   //
-  // A JELZŐ EZÉRT A MÉRÉS TÉNYÉRE IS NÉZ: ha van diagnózis ezen a PR-on, a kérdés
-  // MEG VAN VÁLASZOLVA — a válasz (a culprit-lista, a stack-cél) a panelben áll,
-  // ahová a mérés írja. Egy sor végi kérdőjel ott már csak hazug.
-  if (r.classification === 3 && !measured) flags.push({ label: '(forrás?)', color: 'yellow', axis: 'mark' })
+  // SO THE FLAG ALSO LOOKS AT THE FACT OF MEASUREMENT: if there's a diagnosis
+  // on this PR, the question IS ANSWERED — the answer (the culprit list, the
+  // stack target) lives in the panel, where the measurement writes it. A
+  // row-end question mark there is just a lie at that point.
+  if (r.classification === 3 && !measured) flags.push({ label: '(source?)', color: 'yellow', axis: 'mark' })
   if (r.classification === 4 && r.dep) flags.push({ label: `⛔ conflict #${r.dep}`, color: 'red', axis: 'mark' })
-  // (wf31/24) A `🚀 landolható` FLAG KIVEZETVE — a user kérése: "Vedd ki ezt a
-  // jelzést, idétlen. approved már közli amit kell."
+  // (wf31/24) THE `🚀 landable` FLAG WAS REMOVED — the user's request: "Take
+  // this indicator out, it's silly. approved already conveys what's needed."
   //
-  // MIÉRT DUPLIKÁCIÓ VOLT: a `landable` mező a wf31/23 óta PONTOSAN azt jelenti,
-  // hogy VAN APPROVE (a merge egyetlen blokkolója az approve lett). Az approve
-  // tényét viszont az `rmark` MÁR kimondja (`✔ approved`), ugyanabban a sorban,
-  // néhány cellával balra. Két jelölés ugyanarra a tényre.
+  // WHY IT WAS A DUPLICATION: since wf31/23 the `landable` field means
+  // EXACTLY that THERE IS AN APPROVE (approve became merge's only blocker).
+  // But the fact of approval is ALREADY stated by `rmark` (`✔ approved`), in
+  // the same row, a few cells to the left. Two indicators for the same fact.
   //
-  // A `landable` MEZŐ MEGMARAD a modellben: a gépi fogyasztók (Claude-skill,
-  // `mergeBlockers` egyezés-szerződés) használják, és a bash lista-nézet
-  // klasszifikációja is erre épül. Csak a SOR-FLAG tűnt el — a tény nem.
+  // The `landable` FIELD STAYS in the model: mechanical consumers (the
+  // Claude skill, the `mergeBlockers` matching contract) use it, and the bash
+  // list view's classification is also built on it. Only the ROW FLAG
+  // disappeared — the fact didn't.
   return flags
 }
 
 /**
- * A `queue --json` tömb → megjelenítendő sorok.
+ * The `queue --json` array → displayable rows.
  *
- * A rendezés a lista-nézettel egyezik: a stacked sor a base-e MÖGÉ kerül akkor
- * is, ha a száma jóval nagyobb (#150 a #101 után, a #102 előtt) — a kulcs
- * [(stackedOn // number), number].
+ * The ordering matches the list view: a stacked row lands BEHIND its base
+ * even if its number is much bigger (#150 after #101, before #102) — the key
+ * is [(stackedOn // number), number].
  *
- * A MÁSODIK ARGUMENTUM OPCIONÁLIS: `{ cacheStates, reviewTraces }`, PR-számra
- * kulcsolt egyszerű objektumok. MIÉRT ELŐRE KISZÁMOLT LEKÉPEZÉS, és nem a
- * cache-objektum: a `buildRows` MINDEN renderben lefut, és a user 4. pontja
- * kimondja, hogy a jelző nem lassíthatja a listát. Egy előre kigyűjtött
- * leképezésen a soronkénti munka egy objektum-index — se gh, se hunk, se git
- * hívás nem fér ide. (A cache→leképezés összeállítása az app dolga, egyszer
- * renderenként.) Argumentum nélkül a flag-sáv VÁLTOZATLAN: a régi hívók (a
- * bash-oldal és a meglévő tesztek) nem hasalhatnak el.
+ * THE SECOND ARGUMENT IS OPTIONAL: `{ cacheStates, reviewTraces }`, plain
+ * objects keyed by PR number. WHY A PRE-COMPUTED MAPPING, and not the cache
+ * object: `buildRows` runs on EVERY render, and the user's 4th point states
+ * that the indicator must not slow down the list. On a pre-gathered mapping,
+ * the per-row work is an object lookup — no gh, no hunk, no git call fits
+ * here. (Assembling the cache→mapping is the app's job, once per render.)
+ * Without an argument, the flag band is UNCHANGED: the old callers (the bash
+ * side and the existing tests) can't fall over.
  */
 export function buildRows(json, {
   cacheStates = null,
   reviewTraces = null,
   reviewSpinners = null,
-  // (wf31/72) A FUTÓ AKCIÓ: `{ pr, key }` vagy `null`. Egyetlen akció fut
-  // egyszerre (`actionLock`), tehát egy szám-kulcs pár elég — egy térkép azt
-  // sugallná, hogy több párhuzamos akció is lehet.
+  // (wf31/72) THE RUNNING ACTION: `{ pr, key }` or `null`. Only one action
+  // runs at a time (`actionLock`), so a single number-key pair is enough — a
+  // map would suggest that multiple concurrent actions are possible.
   pendingAction = null,
-  // (wf31/25) OPTIMISTA ÁLLAPOTOK: PR-szám → `'merged'` | `'approved'`. A MI
-  // akciónk eredménye, amit a GitHub API-ja MÉG nem tükröz (aszinkron index) —
-  // lásd a MARKS `merged` ágának indoklását.
+  // (wf31/25) OPTIMISTIC STATES: PR number → `'merged'` | `'approved'`. The
+  // result of OUR OWN action, which the GitHub API doesn't reflect YET
+  // (asynchronous index) — see the reasoning for the MARKS `merged` branch.
   optimistic = null,
 } = {}) {
-  // A LÁNC-MEZŐK a MODELLBŐL jönnek (stackDepth / stackRoot), nem itt
-  // számolódnak újra: a tranzitív feloldás a bash jq-passzban él, és két
-  // implementáció ugyanarra a fogalomra garantáltan elcsúszik (ez a
-  // hazug-státusz bug-osztály, amit a user már bejelentett).
+  // THE CHAIN FIELDS come from the MODEL (stackDepth / stackRoot), they
+  // aren't recomputed here: the transitive resolution lives in the bash jq
+  // pass, and two implementations of the same concept would guaranteed drift
+  // apart (this is the lying-status bug class the user already reported).
   //
-  // FAIL-SAFE a szerződés-eltolódásra: ha egy régebbi `queue --json` nem adja a
-  // mezőket, a `stackedOn`-alapú EGYSZINTŰ képre esünk vissza — a lista
-  // megjelenik, csak lépcső nélkül. Egy kivétel itt a TELJES TUI-t megölné.
+  // FAIL-SAFE against a contract shift: if an older `queue --json` doesn't
+  // supply the fields, we fall back to the `stackedOn`-based SINGLE-LEVEL
+  // picture — the list still appears, just without the staircase. An
+  // exception here would kill the ENTIRE TUI.
   const depthOf = (r) => {
     if (typeof r.stackDepth === 'number' && Number.isFinite(r.stackDepth)) {
       return Math.max(0, Math.floor(r.stackDepth))
@@ -256,56 +274,63 @@ export function buildRows(json, {
     if (typeof r.stackRoot === 'number' && Number.isFinite(r.stackRoot)) return r.stackRoot
     return r.stackedOn ?? r.number
   }
-  // A rendezés a GYÖKÉR szerint csoportosít, azon belül MÉLYSÉG, majd szám.
-  // MIÉRT NEM a régi `[(stackedOn // number), number]`: az a KÖZVETLEN talapzat
-  // szerint csoportosított, ami egy A→B→C láncnál szétvágta a csoportot (a C
-  // kulcsa a B száma volt, nem az A-é), és egy köztes számú független PR
-  // beékelődhetett a lánc közepébe. A `stackRoot` tranzitív, tehát a lánc minden
-  // eleme UGYANAZT az elsődleges kulcsot kapja.
+  // The ordering groups by ROOT, then by DEPTH within that, then by number.
+  // WHY NOT the old `[(stackedOn // number), number]`: that grouped by the
+  // DIRECT pedestal, which split the group apart on an A→B→C chain (C's key
+  // was B's number, not A's), and an independent PR with a number in between
+  // could wedge itself into the middle of the chain. `stackRoot` is
+  // transitive, so every element of the chain gets the SAME primary key.
   const rows = [...json].sort((a, b) =>
     rootOf(a) - rootOf(b) || depthOf(a) - depthOf(b) || a.number - b.number)
   return rows.map((r) => {
     const isStacked = r.stackedOn !== null && r.stackedOn !== undefined
-    // (wf31/25) AZ OPTIMISTA ÁLLAPOT FELÜLÍRJA A MÉRTET. A sorrend load-bearing:
-    // ha a MODELL már utolérte magát (a reload friss adatot adott), az optimista
-    // bejegyzést a hívó törli — tehát amíg itt van, a modellnél FRISSEBB tényt
-    // hordoz.
+    // (wf31/25) THE OPTIMISTIC STATE OVERRIDES THE MEASURED ONE. The order is
+    // load-bearing: once the MODEL has caught up (a reload gave fresh data),
+    // the caller deletes the optimistic entry — so as long as it's here, it
+    // carries a fact FRESHER than the model's.
     const opt = optimistic?.[r.number] ?? null
-    // Az `approved` optimista állapot CSAK az rmark-ot írja felül (a PR nyitva van,
-    // a mark továbbra is `in queue`); a `merged` a MARK-ot is — az a PR sorsa.
+    // The `approved` optimistic state overrides ONLY the rmark (the PR is
+    // still open, the mark stays `in queue`); `merged` overrides the MARK
+    // too — that's the PR's fate.
     const rk = opt === 'approved' ? 'approved' : rmarkKey(r)
     return {
       ...r,
-      // A BOOLEAN `indent` MEGMARAD: a listLayout/renderelő oldal ezt olvassa, és
-      // a mező törlése NÉMA layout-elcsúszást adna (a falsy 0 behúzást számolna).
-      // Az `indentDepth` MELLÉ kerül — a lépcsőzős behúzás mértéke.
+      // The BOOLEAN `indent` STAYS: the listLayout/renderer side reads it,
+      // and dropping the field would cause a SILENT layout drift (the falsy
+      // 0 would count as indentation). `indentDepth` is added ALONGSIDE it —
+      // the amount of staircase indentation.
       indent: isStacked,
       indentDepth: depthOf(r),
-      // A stacked sor nem önállóan aktionölhető: a sorsa a talapzatán dől el.
+      // A stacked row can't be acted on independently: its fate is decided
+      // by its pedestal.
       selectable: !isStacked,
-      // A stacked sor markja "in queue" — a next a talapzatán KERESZTÜL
-      // tartalmazza (így adja a lista-nézet queue_marks_from_model is). A
-      // stacked-séget a sor végi jelző mondja ki, hogy ne duplikálódjon.
+      // A stacked row's mark is "in queue" — next contains it THROUGH its
+      // pedestal (the list view's queue_marks_from_model gives it this way
+      // too). The row-end flag states the stacked-ness, so it doesn't get
+      // duplicated.
       mark: opt === 'merged'
         ? MARKS.merged
         : MARKS[isStacked ? 'queue' : r.state] ?? MARKS.missing,
       rmark: rk ? RMARKS[rk] : null,
-      // A DIMMELÉS JELZÉSE a renderelőnek: a mergelt sor LEHALKUL (a user kérése).
-      // A `Row` a `dimmed` propból amúgy is tud tompítani (overlay-nyitáskor), de
-      // az EGÉSZ listára szól — ez PER SOR, és a sor SORSÁRÓL beszél, nem a
-      // fókuszról. Ezért külön mező, nem a meglévő `dimmed` újrahasznosítása.
+      // THE DIM SIGNAL for the renderer: a merged row DIMS (the user's
+      // request). `Row` can already dim via the `dimmed` prop anyway (when an
+      // overlay opens), but that applies to the WHOLE list — this is PER
+      // ROW, and it talks about the row's FATE, not focus. Hence a separate
+      // field, not reusing the existing `dimmed`.
       settled: opt === 'merged',
-      // A META-JELZŐK a tartalmi jelzők UTÁN fűződnek — EGY helyen, a
-      // `flagsFor` KÉT return-ága (stacked / trunk) fölött. Ha a `flagsFor`-ba
-      // tettük volna, a stacked ág korai return-je miatt a stacked sorról a
-      // jelző NÉMÁN lemaradt volna, és a lista két sor-osztályról MÁST mondana.
+      // The META-FLAGS are appended AFTER the content flags — in ONE place,
+      // above `flagsFor`'s TWO return branches (stacked / trunk). Had we put
+      // it inside `flagsFor`, the stacked branch's early return would have
+      // SILENTLY dropped the flag on a stacked row, and the list would say
+      // DIFFERENT things about the two row classes.
       flags: appendMetaFlags(flagsFor(r, {
-        // A MÉRÉS TÉNYE A CACHE-ÁLLAPOTBÓL: `fresh` VAGY `stale` — mindkettő azt
-        // jelenti, hogy a mérés LEFUTOTT. A `stale` szándékosan benne van: az csak
-        // annyit mond, hogy a main azóta elmozdult, a culpritokat viszont MEGMÉRTÜK,
-        // és a `~` jelző az elavultságot amúgy is kimondja. Ha csak a `fresh`
-        // számítana, a kérdőjel a main minden elmozdulásánál visszatérne — "de hát
-        // megmértem" —, holott a válasz ott áll a panelben.
+        // THE FACT OF MEASUREMENT FROM THE CACHE STATE: `fresh` OR `stale` —
+        // both mean the measurement RAN. `stale` is deliberately included:
+        // it only means main has moved since, but the culprits WERE
+        // MEASURED, and the `~` flag states the staleness anyway. If only
+        // `fresh` counted, the question mark would return on every move of
+        // main — "but I did measure it" — when the answer is right there in
+        // the panel.
         measured: cacheStates?.[r.number] === 'fresh' || cacheStates?.[r.number] === 'stale',
       }), {
         cacheState: cacheStates?.[r.number],
@@ -313,53 +338,57 @@ export function buildRows(json, {
         spinnerFrame: reviewSpinners?.[r.number],
         pendingKey: pendingAction?.pr === r.number ? pendingAction.key : undefined,
       }),
-      // A GÉPI FOGYASZTÓNAK (és a `--json`-nak) is ki kell mondani, nem csak a
-      // glifnek: a szerződés az állapot NEVE, nem a megjelenítése.
+      // The MECHANICAL CONSUMER (and `--json`) needs this stated too, not
+      // just the glyph: the contract is the state's NAME, not its display.
       cacheState: cacheStates?.[r.number] ?? 'none',
       hasReviewTrace: reviewTraces?.[r.number] === true,
     }
   })
 }
 
-// --- (1b) A LÉPCSŐS STACKED-JELÖLÉS: `╰─` a behúzás VÉGÉN -------------------
+// --- (1b) THE STAIRCASE STACKED MARK: `╰─` at the END of the indent -------
 //
-// A USER SZÓ SZERINTI KÉRÉSE: "amikor stacked PR-ok vannak, akkor a bekezdett
-// második PR mellett legyen derékszögű keret karakter:  #911 / ╰─#933" — és
-// megerősítette, hogy TÖBB szintnél LÉPCSŐ legyen. A rekurzív stackelés (a
-// tranzitív `stackDepth`/`stackRoot`) már működik, ez a jelölés a KÉPÉRE.
+// THE USER'S REQUEST, VERBATIM: "when there are stacked PRs, the indented
+// second PR should have a right-angle frame character next to it: #911 /
+// ╰─#933" — and confirmed that at multiple levels there should be a
+// STAIRCASE. The recursive stacking (the transitive `stackDepth`/`stackRoot`)
+// already works, this mark is its PICTURE.
 //
-// A GEOMETRIA, ami a bevezetést egyáltalán megengedi: a `╰─` display-CELLÁBAN
-// PONTOSAN 2 cella, és a behúzás eddig is 2*depth cella volt. A jelölés tehát a
-// behúzás UTOLSÓ KÉT CELLÁJÁBA ÜL BE, nem ad hozzá — a prefix teljes szélessége
-// VÁLTOZATLAN, és így a mark-oszlop sem csúszhat el.
+// THE GEOMETRY that makes introducing this possible at all: `╰─` is EXACTLY
+// 2 display CELLS, and the indent was already 2*depth cells. So the mark
+// SITS INTO the LAST TWO CELLS of the indent, it doesn't add to it — the
+// prefix's total width is UNCHANGED, so the mark column can't shift either.
 //
-// A SZÉLESSÉG MÉRVE, NEM TIPPELVE (élő tmux, CSI 6n cursor-advance):
-//   `╰` U+2570 advance=1 · `─` U+2500 advance=1 · `╰─` együtt advance=2
-// Ez nem formalitás: a user NÉGYSZER jelentette be az oszlop-csúszást, és
-// mindegyik gyökere egy MEGTIPPELT glif-szélesség volt. A box-drawing blokk
-// (U+2500–U+257F) EAW=Ambiguous, tehát nincs a WIDE_RANGES-ben — a saját
-// displayWidth-ünk is 1-nek méri, és a teszt ezt FÜGGETLEN mérővel pineli.
+// THE WIDTH IS MEASURED, NOT GUESSED (live tmux, CSI 6n cursor-advance):
+//   `╰` U+2570 advance=1 · `─` U+2500 advance=1 · `╰─` together advance=2
+// This isn't a formality: the user reported the column drift FOUR times, and
+// every one of them rooted in a GUESSED glyph width. The box-drawing block
+// (U+2500–U+257F) is EAW=Ambiguous, so it's not in WIDE_RANGES — our own
+// displayWidth also measures it as 1, and the test pins this with an
+// INDEPENDENT measurement.
 //
-// MIÉRT EGY KÖZÖS FÜGGVÉNY (és nem két helyen számolt string): a behúzást KÉT
-// oldal olvassa — a `listLayout` title-büdzséje és a renderelő `Row`-ja. A
-// kettőnek BÁJTRA egyeznie kell; ez a projekt MÉRT hibaosztálya (a `floor`
-// binárisan 3 volt, míg a renderelő 2*depth-et használt, és 56/57 oszlopon
-// némán 1-2 cellával túllógott a sor). Egy forrás, egy mérték.
+// WHY ONE SHARED FUNCTION (and not a string computed in two places): the
+// indent is read by TWO sides — `listLayout`'s title budget and the
+// renderer's `Row`. The two MUST agree BYTE-FOR-BYTE; this is the project's
+// MEASURED bug class (the `floor` was BINARY 3, while the renderer used
+// 2*depth, and at column 56/57 the row silently overran by 1-2 cells). One
+// source, one measure.
 
-/** A lépcső GLIFJE. 2 cella (MÉRVE — lásd a szekció fejét). */
+/** The staircase's GLYPH. 2 cells (MEASURED — see the section header). */
 const STACK_MARK = '╰─'
 
 /**
- * A stacked sor BEHÚZÁS-PREFIXE a mélységből: `2*(depth-1)` szóköz + `╰─`.
+ * The stacked row's INDENT PREFIX from the depth: `2*(depth-1)` spaces + `╰─`.
  *
- * A depth=0 (gyökér vagy független PR) ÜRES stringet kap: ott nincs mihez
- * képest bekezdeni, és egy magában álló `╰─` azt hazudná, hogy a sor valamire
- * stackelve van.
+ * depth=0 (root or independent PR) gets an EMPTY string: there's nothing to
+ * indent relative to, and a lone `╰─` would lie that the row is stacked on
+ * something.
  *
- * FAIL-SAFE a degenerált mélységre (negatív, NaN, nem-szám): a `stackDepth` a
- * MODELLBŐL jön (a bash jq-passzból), tehát egy szerződés-eltolódás bármit
- * adhat. Egy `' '.repeat(NaN)` RangeError-t dobna, és egy dobás itt a TELJES
- * listát vinné el — a jelölés kozmetika, a lista nem az.
+ * FAIL-SAFE against a degenerate depth (negative, NaN, non-number):
+ * `stackDepth` comes from the MODEL (the bash jq pass), so a contract shift
+ * can hand back anything. A `' '.repeat(NaN)` would throw a RangeError, and a
+ * throw here would take down the ENTIRE list — the mark is cosmetic, the
+ * list isn't.
  */
 export function stackIndent(depth) {
   const d = Number.isFinite(depth) ? Math.max(0, Math.floor(depth)) : 0
@@ -369,143 +398,155 @@ export function stackIndent(depth) {
 
 export { STACK_MARK }
 
-// --- Layout: a cím-oszlop büdzséje -----------------------------------------
+// --- Layout: the title column's budget --------------------------------------
 
-// A soronkénti fix rész: kurzor(2) + "#" + szám(5) + szóköz + szerző(5) +
-// szóköz + a cím utáni szóköz ≈ 16 cella, plusz 2 cella jobb margó.
+// The per-row fixed part: cursor(2) + "#" + number(5) + space + author(5) +
+// space + the space after the title ≈ 16 cells, plus 2 cells right margin.
 const ROW_FIXED_W = 16
 const ROW_MARGIN_W = 2
 
-/** Egy sor státusz-tailjének szélessége a megadott degradációs szinten. */
+/** The width of a row's status tail at the given degradation level. */
 function tailWidth(r, level) {
   const mark = displayWidth(r.mark.label)
-  if (level >= 2) return mark // csak a mark
+  if (level >= 2) return mark // mark only
   const rmark = r.rmark ? 3 + displayWidth(r.rmark.label) : 0
-  if (level >= 1) return mark + rmark // mark + approve-oszlop, jelzők nélkül
+  if (level >= 1) return mark + rmark // mark + approve column, no flags
   const flags = r.flags.reduce((a, f) => a + 1 + displayWidth(f.label), 0)
   return mark + rmark + flags
 }
 
 /**
- * A LISTA-LAYOUT: a címoszlop szélessége ÉS a státusz-tail degradációs szintje.
+ * THE LIST LAYOUT: the title column's width AND the status-tail degradation
+ * level.
  *
- * Miért nem elég egy puszta szélesség (ez volt a bug, amit a user HÁROMSZOR
- * bejelentett): ha a fix rész + a legszélesebb státusz-tail MAGA túllépi a
- * COLUMNS-t, a címoszlop 0-ra vitele NEM elég — a sor akkor is túllóg, az Ink
- * tördel, és a mark-oszlop soronként más cellába csúszik. ÉLŐ 60 oszlopos
- * tmux-renderben mérve: a #911 sora 65 cella lett, a `#926` jelző átcsúszott a
- * következő sorba, a mark-oszlop 15/17/19 cellába került (ALIGNED: false).
- * A címoszlop nullázása után tehát a TAILT kell fokozatosan elhagyni:
- *   0 = mark + approve-oszlop + jelzők (teljes)
- *   1 = mark + approve-oszlop (a jelzők elmaradnak)
- *   2 = csak a mark (a legszűkebb, még informatív forma)
+ * Why a plain width isn't enough (this was the bug the user reported THREE
+ * times): if the fixed part + the widest status tail ALONE exceeds COLUMNS,
+ * driving the title column to 0 is NOT enough — the row still overflows, Ink
+ * wraps, and the mark column slides into a different cell per row. MEASURED
+ * in a LIVE 60-column tmux render: #911's row became 65 cells, the `#926`
+ * flag slid onto the next row, the mark column landed at cell 15/17/19
+ * (ALIGNED: false). So after zeroing the title column, the TAIL must be
+ * dropped in stages:
+ *   0 = mark + approve column + flags (full)
+ *   1 = mark + approve column (flags dropped)
+ *   2 = mark only (the narrowest, still-informative form)
  *
- * A behúzás (stacked sor) NEM megy bele a tail-számításba: a behúzás a cím
- * ELŐTT áll, és a renderelő a címoszlopot rövidíti vele (`titleWidth - 2`).
- * Ha itt is beszámítanánk, KÉTSZER vonnánk le — pont ez csúsztatta el a
- * mark-oszlopot a behúzott sornál.
+ * The indent (stacked row) does NOT go into the tail computation: the indent
+ * sits BEFORE the title, and the renderer shortens the title column by it
+ * (`titleWidth - 2`). If we counted it here too, we'd subtract it TWICE —
+ * that's exactly what shifted the mark column on the indented row.
  */
 export function listLayout(rows, columns) {
   if (rows.length === 0) return { titleWidth: 0, tailLevel: 0, width: 0 }
-  // A címoszlop a leghosszabb TÉNYLEGES címre clampelődik (nincs értelme üresen
-  // paddolni). A behúzott sor 2 cellát a behúzásra ad, ezért a címét 2-vel
-  // hosszabbnak számoljuk — így a saját címe nem csonkul feleslegesen.
-  // A BEHÚZÁS MÉRTÉKE a MÉLYSÉGBŐL. A `indentDepth` a modellből jött tranzitív
-  // mélység; a `?? (indent ? 1 : 0)` fallback a régi (egyszintű) sor-alakot
-  // tartja életben.
+  // The title column clamps to the longest ACTUAL title (no point padding
+  // empty). The indented row spends 2 cells on the indent, so we count its
+  // title as 2 longer — this way its own title isn't needlessly truncated.
+  // THE INDENT AMOUNT comes FROM THE DEPTH. `indentDepth` is the transitive
+  // depth from the model; the `?? (indent ? 1 : 0)` fallback keeps the old
+  // (single-level) row shape alive.
   //
-  // (1b) A MÉRTÉK a `stackIndent` CELLÁBAN MÉRT szélessége — UGYANAZ a forrás,
-  // amit a renderelő is kiír. NEM egy MÁSODIK `2*depth` képlet: a duplikált
-  // mérték ugyanarra a fogalomra ebben a projektben MÁR elcsúszott egyszer (a
-  // bináris `floor` vs. a renderelő 2*depth-je, 56/57 oszlopon néma túllógás).
-  // Ha a lépcső glifje valaha változik, itt SEMMIT nem kell hozzáigazítani.
+  // (1b) THE AMOUNT is `stackIndent`'s CELL-measured width — the SAME source
+  // the renderer prints too. NOT a SECOND `2*depth` formula: a duplicated
+  // measure for the same concept has ALREADY drifted apart once in this
+  // project (the binary `floor` vs. the renderer's 2*depth, a silent
+  // overflow at column 56/57). If the staircase's glyph ever changes, NOTHING
+  // needs adjusting here.
   const indentOf = (r) =>
     displayWidth(stackIndent(typeof r.indentDepth === 'number' ? r.indentDepth : r.indent ? 1 : 0))
   const longest = Math.max(...rows.map((r) => displayWidth(r.title) + indentOf(r)))
-  // A LEGMÉLYEBB sor behúzása szabja meg a padlót (lásd a `floor`-t lentebb).
+  // The DEEPEST row's indent sets the floor (see the `floor` below).
   const maxIndent = Math.max(...rows.map((r) => indentOf(r)))
   for (const tailLevel of [0, 1, 2]) {
     const statusW = Math.max(...rows.map((r) => tailWidth(r, tailLevel)))
     const avail = columns - ROW_FIXED_W - ROW_MARGIN_W - statusW
-    // A renderelő `Math.max(1, titleWidth - 2*depth)`-et használ, tehát a
-    // legmélyebb sor legalább 1 + 2*depth cellát fogyaszt akkor is, ha itt 0-t
-    // adnánk. A layoutnak ezt a padlót be kell számolnia, különben a garancia
-    // hazug.
+    // The renderer uses `Math.max(1, titleWidth - 2*depth)`, so the deepest
+    // row consumes at least 1 + 2*depth cells even if we gave 0 here. The
+    // layout must account for this floor, otherwise the guarantee is a lie.
     //
-    // MÉRT BUG: a padló korábban BINÁRISAN 3 volt (`indent ? 3 : 1`), tehát egy
-    // 3 mély láncnál 2 cellát tartalékolt a 6 helyett — a layout ALULMÉRTE a
-    // sort, és 56/57 oszlopon a renderelt sor 1-2 cellával TÚLLÓGOTT. A
-    // tartomány szűk, épp ezért néma: a szem nem veszi észre, a terminál
-    // tördel. (A test/next-tui.test.ts a teljes columns-tartományt pásztázza.)
+    // MEASURED BUG: the floor used to be BINARY 3 (`indent ? 3 : 1`), so on a
+    // 3-deep chain it reserved 2 cells instead of 6 — the layout
+    // UNDER-measured the row, and at column 56/57 the rendered row OVERRAN
+    // by 1-2 cells. The range is narrow, which is exactly why it's silent:
+    // the eye doesn't notice, the terminal wraps. (test/next-tui.test.ts
+    // sweeps the full columns range.)
     const floor = 1 + maxIndent
     if (avail >= floor) {
       const titleWidth = Math.min(longest, avail)
-      // (wf31/27) A TÁBLA TÉNYLEGES SZÉLESSÉGE — a TARTALOMBÓL, nem a terminálból.
+      // (wf31/27) THE TABLE'S ACTUAL WIDTH — from the CONTENT, not the
+      // terminal.
       //
-      // A USER LELETE: "A TUI max szélességét bekorlátozza a leghosszabb PR title,
-      // ezért béna, hogyha van valami, ami kimegy a terminál jobb széléig, ha ott
-      // még van hely. […] Az app szélességét határozza meg a táblázat, és annak a
-      // szélén legyen a felirat, és csak odáig menjen a highlight is."
+      // THE USER'S FINDING: "The TUI's max width is capped by the longest PR
+      // title, which is lame when something goes all the way to the
+      // terminal's right edge while there's still room there. […] The
+      // table should determine the app's width, and the status text should
+      // be at its edge, and the highlight should only go that far too."
       //
-      // MIÉRT SZÁMOLHATÓ KI ITT, ÉS MIÉRT ITT A HELYE: a `titleWidth` MÁR a
-      // tartalomra clampel (`Math.min(longest, avail)`) — vagyis ha a leghosszabb
-      // cím rövidebb, mint a rendelkezésre álló hely, a tábla NEM nyúlik ki a
-      // terminál széléig. Ez az információ eddig megvolt, csak nem adtuk ki: a
-      // fejléc, a status-felirat és a kurzor-háttér a `columns`-ot használta, tehát
-      // a TERMINÁL széléig ment, a tábla meg nem.
+      // WHY IT CAN BE COMPUTED HERE, AND WHY THIS IS THE RIGHT PLACE:
+      // `titleWidth` ALREADY clamps to the content (`Math.min(longest,
+      // avail)`) — meaning if the longest title is shorter than the
+      // available room, the table does NOT stretch to the terminal's edge.
+      // This information already existed, we just didn't expose it: the
+      // header, the status text, and the cursor background used `columns`,
+      // so they went to the TERMINAL's edge, while the table didn't.
       //
-      // A KÉPLET a `avail` levezetésének megfordítása, UGYANAZOKKAL a tagokkal —
-      // nem egy második, önálló számítás (az garantáltan elcsúszna: ez a projekt
-      // mért hibaosztálya, lásd a `floor` indoklását fentebb).
+      // THE FORMULA is the reverse of deriving `avail`, with the SAME
+      // terms — not a second, independent computation (that would guaranteed
+      // drift: this project's measured bug class, see the `floor` reasoning
+      // above).
       //
-      // A `statusW` a LEGSZÉLESEBB sor tailje: a tábla jobb szélét az adja meg, nem
-      // az egyes sorok saját hossza — különben a szél soronként ugrálna.
+      // `statusW` is the WIDEST row's tail: that's what sets the table's
+      // right edge, not each row's own length — otherwise the edge would jump
+      // around per row.
       return {
         titleWidth,
         tailLevel,
-        // (wf31/28) A TERMINÁL SZÉLESSÉGÉNÉL EGGYEL KEVESEBB A PLAFON. MÉRT
-        // ARTIFACT (a user resize-leletéből): ha a tábla PONTOSAN a terminál
-        // szélességéig ér, a kurzor-kiemelés háttér-kitöltése az UTOLSÓ CELLÁT is
-        // beírja — és a legtöbb terminál (Ghostty, Terminal.app) ilyenkor
-        // AUTOWRAP-ot tesz, tehát a következő sor elejére ugrik. Az így keletkező
-        // fantom-sor pontosan a bejelentett „feltorlódás".
+        // (wf31/28) THE CEILING IS ONE LESS THAN THE TERMINAL WIDTH. A
+        // MEASURED ARTIFACT (from the user's resize finding): if the table
+        // reaches EXACTLY the terminal's width, the cursor highlight's
+        // background fill writes into the LAST CELL too — and most
+        // terminals (Ghostty, Terminal.app) then AUTOWRAP, jumping to the
+        // start of the next row. The resulting phantom row is exactly the
+        // reported "pile-up".
         //
-        // A `-1` CSAK A PLAFONT érinti: ha a TARTALOM szűkebb (a tipikus eset,
-        // ezért a `Math.min` másik ága nyer), a tábla változatlan.
+        // The `-1` ONLY affects the ceiling: if the CONTENT is narrower (the
+        // typical case, which is why the other `Math.min` branch wins), the
+        // table is unchanged.
         width: Math.min(Math.max(1, columns - 1), ROW_FIXED_W + ROW_MARGIN_W + statusW + titleWidth),
       }
     }
-    // A legszűkebb szinten sincs hely: adjuk a legkevesebbet, amit a renderelő
-    // egyáltalán elfogad. Ez a valóban degenerált eset (nagyon szűk terminál);
-    // itt már nem tudunk nem tördelni, de nem MI tesszük rosszabbá.
+    // Even the narrowest level has no room: give the least the renderer
+    // will accept at all. This is the truly degenerate case (a very narrow
+    // terminal); at this point we can no longer avoid wrapping, but we're
+    // not the one making it worse.
     if (tailLevel === 2) return { titleWidth: 0, tailLevel: 2, width: Math.max(1, columns - 1) }
   }
   return { titleWidth: 0, tailLevel: 2, width: Math.max(1, columns - 1) }
 }
 
 /**
- * A cím-oszlop szélessége. Visszafelé kompatibilis burkoló a listLayout körül —
- * a bin/tuipr.sh és a tesztek ezt a nevet hivatkozzák.
+ * The title column's width. A backward-compatible wrapper around listLayout
+ * — bin/tuipr.sh and the tests reference this name.
  */
 export function titleBudget(rows, columns) {
   return listLayout(rows, columns).titleWidth
 }
 
-// --- A SOR-SPINNER (4): amíg egy PR-on review fut ---------------------------
+// --- THE ROW SPINNER (4): while a review is running on a PR -----------------
 
 /**
- * EGYCELLÁS Braille-spinner frame-ek. NEM emoji: az emoji 2 cellát léptet, és
- * megbontaná a flag-sáv szélesség-számítását (a négyszer bejelentett
- * oszlop-csúszás osztálya). A Braille-blokk (U+2800–U+28FF) nincs a
- * WIDE_RANGES-ben, tehát a saját displayWidth-ünk is 1-nek MÉRI — a teszt ezt
- * assertáln is, nem tippeli.
+ * SINGLE-CELL Braille spinner frames. NOT emoji: emoji steps 2 cells, and
+ * would break the flag band's width computation (the bug class reported four
+ * times, the column drift). The Braille block (U+2800–U+28FF) isn't in
+ * WIDE_RANGES, so our own displayWidth also MEASURES it as 1 — the test
+ * asserts this too, it doesn't guess.
  */
 export const REVIEW_SPINNER_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
 
 /**
- * A spinner lista-jelzője. CYAN (aktivitás, nem figyelmeztetés — a sárga a
- * költségé/blokkolóké). A frame-index körbejár; degenerált index sem dob,
- * mert a spinner kozmetika — egy dobás itt a TELJES listát vinné el.
+ * The spinner's list flag. CYAN (activity, not a warning — yellow is for
+ * cost/blockers). The frame index wraps; a degenerate index doesn't throw
+ * either, because the spinner is cosmetic — a throw here would take down the
+ * ENTIRE list.
  */
 export function reviewSpinnerFlag(frame) {
   const len = REVIEW_SPINNER_FRAMES.length
