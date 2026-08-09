@@ -1,79 +1,84 @@
-// tuipr — AI-REVIEW-CONFIG: az AI-review ELŐFELTÉTELEI és user-választásai.
+// tuipr — AI-REVIEW-CONFIG: the AI review's PRECONDITIONS and user choices.
 //
-// Ami itt lakik: a scope-szűrés (generált/lockfile kizárás), a claude-út
-// felderítése, a blokkolók, a dwell-kapu (typeahead), a költés-plafon
-// (DEFAULTBAN OFF) és a modell-választó (default opus), a review-út opciók, és a
-// megerősítő ekrán összegző szövege.
+// What lives here: scope filtering (generated/lockfile exclusion), locating
+// the claude binary, the blockers, the dwell gate (typeahead), the spend cap
+// (DEFAULT OFF) and the model picker (default opus), the review-path options,
+// and the confirmation screen's summary text.
 //
-// RÉTEGREND: lefelé importál (layout: a summary cellában mér; queue-fetch: a
-// PR-fájlok). SEMMIT nem importál a core-ból vagy felette.
+// LAYER ORDER: imports downward (layout: measures in the summary's cells;
+// queue-fetch: the PR's files). Imports NOTHING from the core or above it.
 //
-// A KÖLTÉS-PLAFON DEFAULT-OFF invariánsát a tesztek A TELJES MODUL-FELÜLETEN
-// mérik (egyetlen függvény-paraméter sem adhat nem-nulla plafont) — a flag csak
-// EXPLICIT user-döntésre mehet ki.
+// The tests measure the spend cap's DEFAULT-OFF invariant ACROSS THE WHOLE
+// MODULE SURFACE (not a single function parameter may yield a non-zero cap)
+// — the flag can only go out on an EXPLICIT user decision.
 import { displayWidth, stepIndex } from './layout.mjs'
 import process from 'node:process'
 import { accessSync, constants } from 'node:fs'
 import { spawnSync } from 'node:child_process'
 
-// --- AI-review: `claude -p` a TUI-ból ('r' billentyű) ----------------------
+// --- AI review: `claude -p` from the TUI ('r' key) --------------------------
 //
-// A FELELŐSSÉG-MODELL: a hívás a FUTTATÓ FEJLESZTŐ lokális Claude-credentialját
-// fogyasztja (OAuth/keychain), nem a CI org-szintű secret-pooljából. Ez ugyanaz
-// a bucket, mint a hunk-os lokális review-nál, tehát a felelősség kategóriája
-// NEM változik — de a költés valós, ezért megerősítés-köteles (lásd
-// aiReviewSummary + a TUI confirm-kapuja).
+// THE RESPONSIBILITY MODEL: the call consumes the RUNNING DEVELOPER's local
+// Claude credential (OAuth/keychain), not CI's org-level secret pool. This is
+// the same bucket as the hunk-level local review, so the responsibility
+// category does NOT change — but the spend is real, hence the confirmation
+// requirement (see aiReviewSummary + the TUI's confirm gate).
 //
-// A SZERZŐDÉS HÁROM PONTON FAIL-CLOSED, és mindhárom MÉRT csapdára válaszol:
+// THE CONTRACT IS FAIL-CLOSED AT THREE POINTS, and all three answer a
+// MEASURED trap:
 //
-//  1. Az EXIT-KÓD NEM GATE. A `claude -p` adhat exit 0 + `subtype:"success"` +
-//     `is_error:false` választ úgy, hogy a review NEM futott le — mérve: a
-//     `/security-review` "git repository-n belül futtatható, de a cwd nem az"
-//     prózát adott vissza, teljesen sikeres burkolóval. Fail-closed gate nélkül
-//     a TUI "0 finding, minden rendben"-t jelentett volna: pontosan az a hazug
-//     üres válasz, amit a --json szerződés tilt. Ezért a VALÓDI gate a
-//     strukturált findings-parse (parseAiReviewResult), és a hiányzó
-//     findings-kulcs DOBÁS, nem üres lista.
-//  2. A SCOPE-SZŰRÉS ELŐFELTÉTEL, nem opció. A #911 teljes diffje mérve
-//     ~8,88 MB / 275 248 sor ≈ 2,2–2,5M token, a contextWindow 1M — a naiv
-//     "adjuk be a diffet" út GARANTÁLTAN elhasal. A churn 97%-a 13 generált
-//     fixture (egyetlen pack.json 198 483 sor); a valódi kód 87 fájl / 7 882 sor
-//     ≈ 184k token, ami kényelmesen befér. A kizárást a megerősítő ekrán
-//     MEGMUTATJA: a fejlesztőnek tudnia kell, mit NEM reviewolt az AI.
-//  3. A KÖLTÉS-PLAFON HARD. A `--max-budget-usd` mindig ki van töltve, mert a
-//     review-skillek agent-fanoutja miatt a költés nem lineáris a diff-mérettel:
-//     a becslés nem védelem, a plafon az.
+//  1. THE EXIT CODE IS NOT THE GATE. `claude -p` can give exit 0 +
+//     `subtype:"success"` + `is_error:false` while the review did NOT run —
+//     measured: `/security-review` returned "runnable inside a git
+//     repository, but the cwd isn't one" prose, wrapped in a fully
+//     successful envelope. Without a fail-closed gate the TUI would have
+//     reported "0 findings, all clear" — exactly the dishonest empty
+//     response the --json contract bans. So the REAL gate is the structured
+//     findings parse (parseAiReviewResult), and a missing findings key is a
+//     THROW, not an empty list.
+//  2. SCOPE FILTERING IS A PRECONDITION, not an option. #911's full diff
+//     measured ~8.88 MB / 275,248 lines ≈ 2.2-2.5M tokens, the context
+//     window is 1M — the naive "just feed in the diff" path GUARANTEED to
+//     fail. 97% of the churn is 13 generated fixtures (a single pack.json,
+//     198,483 lines); the actual code is 87 files / 7,882 lines ≈ 184k
+//     tokens, which fits comfortably. The confirmation screen SHOWS the
+//     exclusion: the developer needs to know what the AI did NOT review.
+//  3. THE SPEND CAP IS HARD. `--max-budget-usd` is always filled in, because
+//     the review skills' agent fan-out makes spend non-linear with diff
+//     size: an estimate is not protection, the cap is.
 //
-// AMI SZÁNDÉKOSAN NEM ITT VAN: a findingok NEM mennek egyenest GitHubra. A
-// runAiReview eredménye a HUNK SESSIONBE kerül (injectHunkComments), ahol a
-// fejlesztő végigmegy rajtuk, töröl/szerkeszt — és a meglévő 'f' út tölti fel.
-// Ez a human-in-the-loop kapu az, ami a body `verifiedBy` állítását IGAZZÁ teszi.
+// WHAT'S DELIBERATELY NOT HERE: findings do NOT go straight to GitHub.
+// runAiReview's result goes into the HUNK SESSION (injectHunkComments),
+// where the developer goes through them, deletes/edits — and the existing
+// 'f' path fills it in. This human-in-the-loop gate is what makes the body's
+// `verifiedBy` claim TRUE.
 
 /**
- * A generált/derivált fájlok minta-listája — ezeket az AI-review kihagyja.
+ * The pattern list of generated/derived files — the AI review skips these.
  *
- * Miért glob-lista és nem méret-heurisztika: a méret önmagában nem mond semmit
- * a reviewálhatóságról (egy 2000 soros kézzel írt view reviewálandó, egy 12
- * soros generált snapshot nem), a generáltság viszont a fájl SZEREPÉBŐL
- * következik. A `reason` a megerősítő ekrán szövege, ezért magyar.
+ * Why a glob list and not a size heuristic: size alone says nothing about
+ * reviewability (a hand-written 2000-line view is worth reviewing, a
+ * 12-line generated snapshot isn't), whereas being generated follows from
+ * the file's ROLE. `reason` is the confirmation screen's text, hence
+ * English.
  */
 const GENERATED_PATTERNS = [
-  { re: /(^|\/)pack\.json$/, reason: 'generált scenario-pack' },
-  { re: /\.jsonl$/, reason: 'generált event-stream (jsonl)' },
+  { re: /(^|\/)pack\.json$/, reason: 'generated scenario pack' },
+  { re: /\.jsonl$/, reason: 'generated event stream (jsonl)' },
   { re: /(^|\/)(pnpm-lock\.yaml|package-lock\.json|yarn\.lock|Podfile\.lock)$/, reason: 'lockfile' },
   { re: /(^|\/)__snapshots__\//, reason: 'jest snapshot' },
   { re: /\.snap$/, reason: 'jest snapshot' },
-  { re: /(^|\/)(generated|__generated__)\//, reason: 'generált könyvtár' },
-  { re: /\.generated\.[a-z]+$/, reason: 'generált fájl' },
+  { re: /(^|\/)(generated|__generated__)\//, reason: 'generated directory' },
+  { re: /\.generated\.[a-z]+$/, reason: 'generated file' },
 ]
 
 /**
- * A PR fájl-listájából a reviewálandó scope és a kizártak.
+ * From the PR's file list, the reviewable scope and the excluded ones.
  *
- * A visszatérés ALAKJA szándékosan aszimmetrikus: a `scope` puszta útvonal-lista
- * (ez megy a promptba), a `excluded` viszont OKKAL együtt — mert azt a
- * megerősítő ekrán mutatja meg, és egy indoklás nélküli "kihagyva: 13 fájl"
- * nem auditálható.
+ * The return SHAPE is deliberately asymmetric: `scope` is a plain path list
+ * (this goes into the prompt), whereas `excluded` comes WITH A REASON —
+ * because that's what the confirmation screen shows, and an unexplained
+ * "13 files excluded" isn't auditable.
  */
 export function aiReviewScope(files) {
   const scope = []
@@ -86,113 +91,120 @@ export function aiReviewScope(files) {
   return { scope, excluded }
 }
 
-// Az a fájlszám, ami fölött a megerősítő ekrán NYOMATÉKOSAN figyelmeztet. A
-// #911 (100 fájl) van a fejünkben, de a küszöb nem rá van szabva: 40 fájl fölött
-// egy AI-review már többszáz ezer token, és a fejlesztő sem tudja átolvasni a
-// findingokat egy ülésben. A küszöb LÁTHATÓ konstans, nem szórt magic number.
+// The file count above which the confirmation screen warns EMPHATICALLY.
+// #911 (100 files) is in mind, but the threshold isn't tuned to it: above 40
+// files an AI review is already several hundred thousand tokens, and the
+// developer can't read through the findings in one sitting either. The
+// threshold is a VISIBLE constant, not a magic number scattered around.
 const AI_LARGE_FILES = 40
 const AI_LARGE_CHURN = 5000
 
 /**
- * A `claude` bináris útja, vagy null. A hiánya BLOKKOLÓ, nem néma no-op.
+ * The `claude` binary's path, or null. Its absence is a BLOCKER, not a
+ * silent no-op.
  *
- * A PATH-ot MAGUNK járjuk be, nem `command -v`-t shellezünk: a `shell: true` +
- * args kombináció Node-deprecated (DEP0190, escape-elés nélküli konkatenáció),
- * és egy `/bin/sh` indítást is megspórolunk. A `spawnSync('claude', …)` ENOENT-je
- * nem elég korai jelzés: a megerősítő ekrán a hívás ELŐTT akarja tudni, hogy
- * van-e claude egyáltalán.
+ * We walk PATH OURSELVES rather than shelling out to `command -v`: the
+ * `shell: true` + args combination is Node-deprecated (DEP0190,
+ * concatenation without escaping), and it also saves us spawning a
+ * `/bin/sh`. `spawnSync('claude', …)`'s ENOENT isn't an early enough signal:
+ * the confirmation screen wants to know BEFORE the call whether claude
+ * exists at all.
  */
 export function claudePath() {
   const dirs = (process.env.PATH || '').split(':').filter((d) => d.length > 0)
   for (const d of dirs) {
     const p = `${d}/claude`
     try {
-      // X_OK: a puszta létezés nem elég, futtathatónak is kell lennie.
+      // X_OK: mere existence isn't enough, it has to be executable too.
       accessSync(p, constants.X_OK)
       return p
     } catch {
-      // Nem ebben a könyvtárban van — a következő PATH-elem jön. Ez NEM
-      // hibaelnyelés: a hiány normális eset, és a végén null-lal jelezzük.
+      // Not in this directory — on to the next PATH element. This is NOT
+      // swallowing an error: absence is the normal case, and we signal it
+      // with null at the end.
     }
   }
   return null
 }
 
 /**
- * Az AI-review blokkolói, FELSOROLVA — a megerősítő ekrán ezt mutatja, és y-ra
- * csak üres lista mellett indul (ugyanaz a mechanika, mint a mergeBlockers).
+ * The AI review's blockers, LISTED — the confirmation screen shows this, and
+ * `y` only starts with an empty list (same mechanism as mergeBlockers).
  *
- * A claude hiánya MAGYARÁZÓ hibát ad, nem csak egy "nincs claude"-ot: a projekt
- * szabálya szerint a néma/érthetetlen hibaelnyelés tilos.
+ * claude's absence gives an EXPLANATORY error, not just a "no claude": per
+ * the project's rule, silent/unintelligible error-swallowing is banned.
  */
 export function aiReviewBlockers({ claudePath: cp, scope }) {
   const out = []
   if (!cp) {
     out.push(
-      'a `claude` CLI nem található a PATH-on — az AI-review a lokális Claude Code '
-      + 'telepítést hívja (`claude -p`). Telepítsd, vagy tedd a PATH-ra, majd próbáld újra.',
+      'the `claude` CLI was not found on PATH — the AI review calls the local Claude Code '
+      + 'installation (`claude -p`). Install it, or put it on PATH, then try again.',
     )
   }
   if (!scope || scope.length === 0) {
     out.push(
-      'a review-scope ÜRES: a PR minden fájlja generált/lock fájl, tehát nincs mit '
-      + 'AI-review-ra adni. Reviewold a diffet kézzel (`d`).',
+      'the review scope is EMPTY: every file in the PR is a generated/lock file, so there\'s '
+      + 'nothing to hand to the AI review. Review the diff by hand (`d`).',
     )
   }
   return out
 }
 
 /**
- * A megerősítő ekrán MINIMÁLIS dwell-ideje ms-ban: ennyi ideig nem fogadunk el
- * 'y'-t a mountolás után. 250 ms — a szándékos gombnyomáshoz a szem-kéz kör
- * ennél lassabb, a pufferelt keypress viszont ~0 ms-nál csapódik be.
+ * The confirmation screen's MINIMUM dwell time in ms: we don't accept 'y'
+ * for this long after mounting. 250 ms — the eye-hand loop for a deliberate
+ * keypress is slower than this, whereas a buffered keypress lands at ~0 ms.
  */
 export const CONFIRM_DWELL_MS = 250
 
-// --- A költés-plafon: DEFAULTBAN KIKAPCSOLVA -------------------------------
+// --- The spend cap: OFF BY DEFAULT ------------------------------------------
 //
-// A MÉRT TÉNY, amiből a döntés következik (`claude --help`):
+// THE MEASURED FACT the decision follows from (`claude --help`):
 //     --max-budget-usd <amount>   Maximum dollar amount to spend on API calls
 //                                 (only works with --print)
-// Tehát a flag API-KÖLTÉSRE való fogalom: dollárban vágja el a futást. A user
-// viszont SUBSCRIPTION limitet fogyaszt (nincs ANTHROPIC_API_KEY, OAuth-alapú
-// auth), ahol nincs dollár-számla, amit vágni lehetne. Ott egy szám alapján
-// történő hard vágás legjobb esetben no-op, legrosszabb esetben FÉLÚTON elvágja
-// a review-t: a tokent elköltötte, findingot nem ad. Az elvágott review
-// ROSSZABB, mint a plafon nélküli futás.
+// So the flag is an API-SPEND concept: it cuts the run off in dollars. The
+// user, though, consumes a SUBSCRIPTION limit (no ANTHROPIC_API_KEY,
+// OAuth-based auth), where there's no dollar bill to cut against. There, a
+// hard cutoff based on a number is a no-op in the best case, and in the
+// worst case cuts the review off HALFWAY: the tokens spent, no findings
+// given. A cut-off review is WORSE than running with no cap.
 //
-// EZÉRT a szerződés három pontja:
-//   1. DEFAULT OFF, és kikapcsolva a `--max-budget-usd` EGYÁLTALÁN nincs az
-//      argv-ben (nem 0, nem "unlimited", nem undefined-string — nincs flag);
-//   2. ad hoc kapcsolható a TUI-ban, de HANGSÚLYTALANUL: egy dimmelt sor az
-//      overlay alján. Nem kap kiemelést és nem kap magyarázó bekezdést, mert
-//      amit tud, az bizonytalan — a UI ne higgyen róla többet;
-//   3. a VALÓDI védelem a subscription-limitre a PR-MÉRET-INFO (fájlszám +
-//      diff-sorok, nagy PR-on kiemelten) — az bizonyítottan hasznos, tehát az
-//      a hangsúlyos rész, nem ez.
+// SO the contract has three points:
+//   1. DEFAULT OFF, and disabled `--max-budget-usd` isn't in argv AT ALL
+//      (not 0, not "unlimited", not an undefined-string — no flag);
+//   2. switchable ad hoc in the TUI, but UNEMPHASIZED: one dimmed row at the
+//      bottom of the overlay. It gets no highlight and no explanatory
+//      paragraph, because what it does is uncertain — the UI shouldn't
+//      claim to believe more about it than that;
+//   3. the REAL protection against the subscription limit is the PR-SIZE
+//      INFO (file count + diff lines, emphasized on a large PR) — that's
+//      proven useful, so that's the emphasized part, not this.
 //
-// A VÁLASZTÁS NEM RAGADÓS a sessionön túl: nincs perzisztálás. Egy elfelejtett,
-// diszkre írt plafon pont az a néma vágás lenne, amit a fenti indoklás tilt.
+// THE CHOICE ISN'T STICKY beyond the session: no persistence. A forgotten
+// cap written to disk would be exactly the silent cutoff the rationale above
+// bans.
 
 /**
- * A választható plafon-fokozatok USD-ben. LÁTHATÓ, fix lista, nem szabad
- * beírás: egy szabad numerikus input a TUI-ban több kódot és több hibaesetet
- * adna (parse, validálás, kurzor), mint amennyit egy bizonytalan hatású flag
- * megér. Öt fokozat elég a "nagyságrend" kifejezésére.
+ * The selectable cap tiers in USD. A VISIBLE, fixed list, not free entry: a
+ * free numeric input in the TUI would add more code and more error cases
+ * (parsing, validation, cursor) than a flag of uncertain effect is worth.
+ * Five tiers are enough to express "order of magnitude".
  */
 export const BUDGET_STEPS_USD = [1, 2, 3, 5, 10]
 
 /**
- * A plafon KEZDŐÁLLAPOTA: `{ enabled, usd }`.
+ * The cap's STARTING STATE: `{ enabled, usd }`.
  *
- * Az env (`TUIPR_AI_REVIEW_BUDGET_USD`) csak KEZDŐÉRTÉKET ad — ha van érvényes
- * értéke, bekapcsolt állapotból indulunk azzal a számmal. Env nélkül KIKAPCSOLT
- * állapot, `usd: undefined`, tehát a hívási úton nincs mit átadni.
+ * The env var (`TUIPR_AI_REVIEW_BUDGET_USD`) only gives a STARTING VALUE —
+ * if it has a valid value, we start enabled with that number. Without env,
+ * DISABLED state, `usd: undefined`, so there's nothing to pass on the call
+ * path.
  *
- * Az ÉRVÉNYTELEN env NEM kapcsol be (fail-closed a KIKAPCSOLT irányba): a
- * `Number('')` 0-t, a `Number('abc')` NaN-t ad, és egyik sem szándék-jelzés. A
- * 0 azonnal elvágott review lenne, a NaN pedig parse-hiba a claude oldalán —
- * mindkettő rosszabb, mint a plafon nélküli futás.
+ * An INVALID env does NOT enable it (fail-closed toward DISABLED):
+ * `Number('')` gives 0, `Number('abc')` gives NaN, and neither is a signal
+ * of intent. 0 would be an immediately cut-off review, and NaN a parse error
+ * on claude's side — both worse than running with no cap.
  */
 export function aiReviewBudgetState({ env } = {}) {
   const n = Number(env)
@@ -203,10 +215,10 @@ export function aiReviewBudgetState({ env } = {}) {
 }
 
 /**
- * A `b` billentyű: be/ki. Bekapcsoláskor a legutóbbi (vagy a default) fokozatra
- * ül vissza, kikapcsoláskor az `usd` ELTŰNIK — nem "megőrzött, de inaktív"
- * érték, mert egy inaktív szám a hívási úton pont az a szivárgás, amit az
- * argv-guard tesztje tilt.
+ * The `b` key: on/off. On enabling it settles back onto the last (or
+ * default) tier, on disabling `usd` DISAPPEARS — not a "preserved but
+ * inactive" value, because an inactive number on the call path is exactly
+ * the leak the argv-guard test bans.
  */
 export function budgetToggle(state) {
   const on = state?.enabled === true
@@ -216,16 +228,17 @@ export function budgetToggle(state) {
   return { enabled: true, usd }
 }
 
-// A bekapcsoláskor felvett fokozat. A 3 USD a lista közepe: nem a legkisebb
-// (ami félúton vágna), nem a legnagyobb (ami látszatra "korlátlan").
+// The tier taken on enabling. 3 USD is the list's middle: not the smallest
+// (which would cut halfway), not the largest (which would look "unlimited").
 const BUDGET_DEFAULT_USD = 3
 
 /**
- * A `←`/`→` léptetés a fokozatokon, KÖRBE.
+ * The `←`/`→` step through the tiers, WRAPPING AROUND.
  *
- * KIKAPCSOLT állapotban NO-OP: a léptetés NEM kapcsol be. A kapcsoló a `b`, és
- * ha a nyíl is bekapcsolna, egy véletlen nyíl-nyomás némán plafont húzna a
- * futásra — pont az a néma állapotváltás, amit a fail-closed elv tilt.
+ * NO-OP in DISABLED state: stepping does NOT enable it. The switch is `b`,
+ * and if the arrow also enabled it, a stray arrow press would silently pull
+ * a cap onto the run — exactly the silent state change the fail-closed
+ * principle bans.
  */
 export function budgetStep(state, delta) {
   if (state?.enabled !== true) return { enabled: false, usd: undefined }
@@ -235,30 +248,33 @@ export function budgetStep(state, delta) {
 }
 
 /**
- * A budget-sor SZÖVEGE — egy sor, dimmelten, az overlay alján.
+ * The budget row's TEXT — one row, dimmed, at the bottom of the overlay.
  *
- * A BIZONYTALANSÁG KIMONDVA, de zárójelben és röviden: a `claude --help` szerint
- * a flag "API calls"-ra vonatkozik, a user viszont subscription-limitet
- * fogyaszt, tehát nem tudjuk, hogy egyáltalán fog-e vágni. Ez a fél sor a
- * becsületes állítás — egy magyarázó bekezdés viszont pont azt a hangsúlyt adná
- * neki, amit a user KIFEJEZETTEN nem kért ("lehet nagyon hangsúlytalan helyen").
+ * THE UNCERTAINTY IS STATED, but in parentheses and briefly: per
+ * `claude --help` the flag applies to "API calls", whereas the user consumes
+ * a subscription limit, so we don't know whether it'll cut anything at all.
+ * This half-line is the honest statement — an explanatory paragraph, though,
+ * would give it exactly the emphasis the user EXPLICITLY didn't ask for
+ * ("can be in a very unemphasized spot").
  */
 export function budgetLine(state) {
   if (state?.enabled !== true) return 'budget: off (b)'
-  return `budget: ${state.usd} USD (b: ki · ←/→: ${BUDGET_STEPS_USD.join('/')} — subscription alatt a hatása bizonytalan)`
+  return `budget: ${state.usd} USD (b: off · ←/→: ${BUDGET_STEPS_USD.join('/')} — uncertain effect under subscription)`
 }
 
 /**
- * A `--max-budget-usd` argv-részlete — VAGY két elem, VAGY üres tömb.
+ * The `--max-budget-usd` argv fragment — EITHER two elements, OR an empty
+ * array.
  *
- * EGY HELYEN dől el, hogy a flag kimegy-e: a v1 findings-út és az agent-út
- * KÜLÖN command-buildere kétszer hozta volna ugyanezt a döntést, és a
- * default-OFF garancia pont attól csúszhatott volna szét, hogy az egyiket
- * javítjuk, a másikat nem.
+ * Whether the flag goes out is decided in ONE place: the v1 findings path
+ * and the agent path's SEPARATE command builders would have made this same
+ * decision twice, and the default-OFF guarantee could have drifted apart
+ * exactly from fixing one and not the other.
  *
- * A GUARD FAIL-CLOSED a flag ELHAGYÁSA felé: nem-szám, nem-véges, nem-pozitív
- * bemenetre NINCS flag. A `String(undefined)` = "undefined" a claude oldalán
- * parse-hiba, a `0` pedig azonnali vágás — a hiányzó flag mindkettőnél jobb.
+ * THE GUARD IS FAIL-CLOSED toward OMITTING the flag: non-number, non-finite,
+ * non-positive input gets NO flag. `String(undefined)` = "undefined" is a
+ * parse error on claude's side, and `0` is an immediate cutoff — the missing
+ * flag beats both.
  */
 export function budgetArgs(maxBudgetUsd) {
   const n = Number(maxBudgetUsd)
@@ -266,39 +282,42 @@ export function budgetArgs(maxBudgetUsd) {
   return ['--max-budget-usd', String(n)]
 }
 
-// --- A REVIEW-AGENT MODELLJE: MINDIG EXPLICIT, DEFAULT OPUS -----------------
+// --- THE REVIEW AGENT'S MODEL: ALWAYS EXPLICIT, DEFAULT OPUS ----------------
 //
-// A MÉRT LELET (a user élő tesztje, #904 saját futtatás): a `claude -p` hívásunk
-// NEM adott `--model`-t, tehát a user MENTETT DEFAULTJÁT örökölte — nála Fable 5,
-// a legdrágább tier —, és EGYETLEN review kimerítette a session-keretét. A flag
-// elhagyása tehát nem semleges: néma költség-eszkaláció annál, akinek a
-// defaultja drága. EZÉRT a `--model` az argv-ben KÖTELEZŐ (lásd a két
-// command-builder végét), és a default a user javaslata szerint az opus.
+// THE MEASURED FINDING (the user's live test, a #904 self-run): our
+// `claude -p` call did NOT pass `--model`, so it inherited the user's SAVED
+// DEFAULT — Fable 5 for them, the most expensive tier — and a SINGLE review
+// exhausted their session budget. Omitting the flag, then, isn't neutral:
+// it's a silent cost escalation for whoever's default is expensive. THAT'S
+// WHY `--model` is MANDATORY in argv (see the end of both command builders),
+// and the default, per the user's suggestion, is opus.
 //
-// A VÁLASZTÉK három elem, LÁTHATÓ listaként (a TUI-váltó ezt járja be körbe):
-// az opus a kiegyensúlyozott default, a sonnet az olcsó/gyors út, a fable a
-// legerősebb — de a sora KIMONDJA a következményt (a session-keretet gyorsan
-// meríti), mert a user pontosan ebbe futott bele mérés nélkül.
+// THE CHOICE is three items, as a VISIBLE list (the TUI toggle cycles
+// through this): opus is the balanced default, sonnet the cheap/fast path,
+// fable the strongest — but its row STATES the consequence (exhausts the
+// session budget quickly), because the user ran into exactly this without
+// measuring.
 export const AI_REVIEW_DEFAULT_MODEL = 'opus'
 
 export const AI_REVIEW_MODELS = [
-  // Az opus sorában SZÁNDÉKOSAN nincs "default" szó: a user pont a néma
-  // default-öröklésen égett meg, a szó maga is azt sugallná, hogy "valami
-  // máshol eldőlt". A konkrét név + a jelleg a becsületes alak.
-  { id: 'opus', label: 'opus — ajánlott (alapos review, normál keret-fogyasztás)' },
-  { id: 'sonnet', label: 'sonnet — olcsóbb, gyors' },
-  { id: 'fable', label: 'fable — a legerősebb, de a session-keretet gyorsan meríti' },
+  // The opus row DELIBERATELY has no "default" word: the user got burned by
+  // exactly the silent default inheritance, and the word itself would
+  // suggest "something was decided elsewhere". The concrete name + its
+  // character is the honest form.
+  { id: 'opus', label: 'opus — recommended (thorough review, normal budget consumption)' },
+  { id: 'sonnet', label: 'sonnet — cheaper, fast' },
+  { id: 'fable', label: 'fable — the strongest, but exhausts the session budget quickly' },
 ]
 
 /**
- * A modell-választó KEZDŐÁLLAPOTA: `{ id, fromEnv }`.
+ * The model picker's STARTING STATE: `{ id, fromEnv }`.
  *
- * Az env (`TUIPR_AI_REVIEW_MODEL`) csak KEZDŐÉRTÉKET ad — a TUI-váltás
- * futásonként felülírja (ugyanaz a minta, mint a budget-env). Az env-értéket
- * NEM szűrjük a saját listánkra: a `--model` a teljes modellnevet is elfogadja
- * (`claude --help`: "or a model's full name"), és a user fixálási szándéka
- * erősebb, mint a mi választékunk. Üres/whitespace env NEM választás — a
- * default (opus) megy.
+ * The env var (`TUIPR_AI_REVIEW_MODEL`) only gives a STARTING VALUE — the
+ * TUI toggle overrides it per run (same pattern as the budget env). We do
+ * NOT filter the env value against our own list: `--model` also accepts a
+ * full model name (`claude --help`: "or a model's full name"), and the
+ * user's intent to pin a model is stronger than our own selection. An
+ * empty/whitespace env is NOT a choice — the default (opus) is used.
  */
 export function aiReviewModelState({ env } = {}) {
   const v = typeof env === 'string' ? env.trim() : ''
@@ -307,13 +326,15 @@ export function aiReviewModelState({ env } = {}) {
 }
 
 /**
- * A modell-váltó (az `m` billentyű a megerősítő panelen): KÖRBEJÁR a listán.
+ * The model toggle (the `m` key on the confirmation panel): CYCLES through
+ * the list.
  *
- * LISTA-IDEGEN (env-ből fixált teljes nevű) modellről az ELSŐ lépés a lista
- * elejére (a defaultra) visz: a léptetés így determinisztikus, és a user nem
- * ragad be egy olyan névbe, amit a váltó nem ismer. A visszaút az env-értékhez
- * szándékosan nincs — aki env-vel fixált, az a váltót nem nyomkodja; aki
- * nyomkodja, az a látható választékból akar választani.
+ * From a LIST-FOREIGN model (a full name pinned from env), the FIRST step
+ * goes to the START of the list (the default): stepping is thus
+ * deterministic, and the user doesn't get stuck on a name the toggle doesn't
+ * know. There's deliberately no way back to the env value — whoever pinned
+ * via env doesn't press the toggle; whoever presses it wants to choose from
+ * the visible selection.
  */
 export function modelStep(state, delta = +1) {
   const i = AI_REVIEW_MODELS.findIndex((m) => m.id === state?.id)
@@ -322,140 +343,153 @@ export function modelStep(state, delta = +1) {
 }
 
 /**
- * A modell-sor SZÖVEGE a megerősítő panelen — mindig a KONKRÉT modellnév.
+ * The model row's TEXT on the confirmation panel — always the CONCRETE
+ * model name.
  *
- * A régi "Modell: claude (default)" alak TILOS: pont azt fedte el, hogy a
- * "default" a user gépén BÁRMI lehet (nála a legdrágább tier volt). A fable
- * sora a keret-figyelmeztetést is hordozza; az env-ből jött lista-idegen név
- * a saját alakjában látszik.
+ * The old "Model: claude (default)" form is BANNED: it hid exactly the fact
+ * that "default" could be ANYTHING on the user's machine (for them it was
+ * the most expensive tier). The fable row also carries the budget warning;
+ * a list-foreign name from env shows in its own form.
  */
 export function modelLine(state) {
   const id = state?.id ?? AI_REVIEW_DEFAULT_MODEL
   const known = AI_REVIEW_MODELS.find((m) => m.id === id)
-  const label = known ? known.label : `${id} (env-ből fixálva)`
-  return `modell: ${label} (m: váltás — ${AI_REVIEW_MODELS.map((m) => m.id).join('/')})`
+  const label = known ? known.label : `${id} (fixed from env)`
+  return `model: ${label} (m: switch — ${AI_REVIEW_MODELS.map((m) => m.id).join('/')})`
 }
 
-/** A `--model` argv-részlete — MINDIG két elem (a default-öröklés tilos). */
+/** The `--model` argv fragment — ALWAYS two elements (default inheritance is banned). */
 export function modelArgs(model) {
   const id = typeof model === 'string' && model.trim() !== '' ? model.trim() : AI_REVIEW_DEFAULT_MODEL
   return ['--model', id]
 }
 
 
-// --- Review-út választás ---------------------------------------------------
+// --- Review path selection ---------------------------------------------------
 //
-// AZ ÚJ MODELL: a findingokat MAGA az AI-review agent írja be a hunk sessionbe
-// (a hunk-review skill `comment apply` batch-útján), NEM a TUI. A TUI csak
-// INDÍTJA a `claude -p`-t és megvárja. Ezért a "review-út" = melyik slash-command
-// fut a `claude -p` alatt — és ez a választás LÁTHATÓ, nem beégetett.
+// THE NEW MODEL: the AI-review agent itself writes the findings into the
+// hunk session (via the hunk-review skill's `comment apply` batch path), NOT
+// the TUI. The TUI only STARTS `claude -p` and waits for it. So "review
+// path" = which slash command runs under `claude -p` — and that choice is
+// VISIBLE, not hardcoded.
 //
-// KIZÁRT UTAK, és MIÉRT (ez a lista maga a döntés dokumentációja):
-//   - builtin `/review`: EGY-agentes one-shot, tehát se fan-out, se verify — a
-//     6-sweepes agent-review-hoz képest nagyságrenddel kevesebbet talál;
-//   - `/code-review ultra`: CLOUD-ban fut ($5-25/run), és a binary TILTJA az
-//     agent-indítást — a TUI-ból nem is futtatható.
+// EXCLUDED PATHS, and WHY (this list is itself the decision's
+// documentation):
+//   - builtin `/review`: a SINGLE-agent one-shot, so no fan-out, no verify —
+//     finds an order of magnitude less than the 6-sweep agent-review;
+//   - `/code-review ultra`: runs in the CLOUD ($5-25/run), and the binary
+//     BANS starting agents — can't even be run from the TUI.
 
 export const REVIEW_PATHS = [
   {
     id: 'agent-review',
     default: true,
-    label: 'agent-review (6 skill-delegált sweep, bit-azonos a CI-vel)',
+    label: 'agent-review (6 skill-delegated sweeps, bit-identical to CI)',
     command: '/agent-review',
-    note: 'A CI-vel BIT-AZONOS út: ugyanaz a 6 skill-delegált sweep, ugyanaz a JSON-séma. '
-      + 'Amit itt lát, azt fogja a CI is jelezni.',
+    note: 'The path BIT-IDENTICAL to CI: the same 6 skill-delegated sweeps, the same JSON schema. '
+      + 'Whatever you see here is what CI will flag too.',
   },
   {
     id: 'code-review',
     default: false,
-    label: '/code-review high (multi-agentes fan-out + verify, normál usage)',
+    label: '/code-review high (multi-agent fan-out + verify, normal usage)',
     command: '/code-review high',
-    note: 'Modern multi-agentes út (fan-out + verify), a normál usage-ből megy. NEM a CI szabályai '
-      + 'szerint reviewol, tehát a CI ettől eltérő findingokat adhat. Az `xhigh` mélyebb, drágább.',
+    note: 'Modern multi-agent path (fan-out + verify), runs from normal usage. Does NOT review by '
+      + 'CI\'s rules, so CI may surface different findings. `xhigh` is deeper, more expensive.',
   },
 ]
 
 /**
- * A felajánlott review-utak. A DEFAULT az `agent-review`, mert az a CI-vel
- * bit-azonos: a lokális review így nem mond mást, mint amit a gate mondani fog.
+ * The offered review paths. The DEFAULT is `agent-review`, because it's
+ * bit-identical to CI: the local review then says nothing different from
+ * what the gate will say.
  */
 export function reviewPathOptions() {
   return REVIEW_PATHS.map((p) => ({ ...p }))
 }
 
-// A költség-figyelmeztetés küszöbei. LÁTHATÓ konstansok: a user döntése szerint
-// >30 fájl VAGY >2000 diff-sor fölött nyomatékos figyelmeztetés kell, mert ott az
-// agent-fanout token-költése már érdemi.
+// The cost warning's thresholds. VISIBLE constants: per the user's decision,
+// above 30 files OR 2000 diff lines an emphatic warning is needed, because
+// there the agent fan-out's token spend is already significant.
 const REVIEW_WARN_FILES = 30
 const REVIEW_WARN_CHURN = 2000
 
 /**
- * Költség-figyelmeztetés a review-út választó ekrányra, vagy null.
+ * Cost warning for the review-path picker screen, or null.
  *
- * A MÉRT szám benne van a szövegben: egy általános "ez nagy PR" nem
- * auditálható, és a user nem tudná, mennyire nagy.
+ * The MEASURED number is in the text: a generic "this is a large PR" isn't
+ * auditable, and the user wouldn't know how large.
  */
 export function reviewPathWarning({ fileCount = 0, churn = 0 } = {}) {
   const byFiles = fileCount > REVIEW_WARN_FILES
   const byChurn = churn > REVIEW_WARN_CHURN
   if (!byFiles && !byChurn) return null
   const reasons = []
-  if (byFiles) reasons.push(`${fileCount} fájl (> ${REVIEW_WARN_FILES})`)
-  if (byChurn) reasons.push(`${churn} diff-sor (> ${REVIEW_WARN_CHURN})`)
-  // A "saját tokenjeidet fogyasztja" záró mondat SZÁNDÉKOSAN nincs itt (user
-  // kifogása: felesleges). A MÉRT számok maradnak — azok auditálhatók.
+  if (byFiles) reasons.push(`${fileCount} files (> ${REVIEW_WARN_FILES})`)
+  if (byChurn) reasons.push(`${churn} diff lines (> ${REVIEW_WARN_CHURN})`)
+  // The closing sentence "consumes your own tokens" is DELIBERATELY not
+  // here (user's complaint: unnecessary). The MEASURED numbers stay — those
+  // are auditable.
   return (
-    `FIGYELEM — KÖLTSÉG: ${reasons.join(' és ')}. A review-utak agent-fanoutosak, tehát a `
-    + 'token-költés ezen a méreten már érdemi, és a findingok átolvasása is hosszú lesz.'
+    `WARNING — COST: ${reasons.join(' and ')}. The review paths are agent-fanned-out, so `
+    + 'token spend at this size is already significant, and reading through the findings will take a while.'
   )
 }
 
 /**
- * Elfogadható-e a megerősítés (a 'y') EZEN a keypressen? — TYPEAHEAD-KAPU.
+ * Is the confirmation (the 'y') acceptable on THIS keypress? — the
+ * TYPEAHEAD GATE.
  *
- * A MECHANIZMUS INDOKLÁSA ITT, KÓDKOMMENTBEN ÉL, nem a UI-ban: a kapu a normál
- * használatban LÁTHATATLAN (a szándékos gombnyomás szem-kéz köre lassabb a
- * dwellnél), tehát a megerősítő ekrányon a magyarázata csak zaj volt — a user
- * kifogása pontosan ez volt. Aki belefut, egy rövid "túl korai" sort kap.
+ * THE MECHANISM'S RATIONALE LIVES HERE, IN A CODE COMMENT, not in the UI:
+ * the gate is INVISIBLE in normal use (a deliberate keypress's eye-hand loop
+ * is slower than the dwell), so explaining it on the confirmation screen was
+ * just noise — that was exactly the user's complaint. Whoever hits it gets
+ * a short "too early" line.
  *
- * MIÉRT KELL: az `askAiReview` BLOKKOLÓ szinkron I/O-t végez (`gh pr view
- * --json files`, éles PR-on ~1 másodperc), majd megnyitja a megerősítő ekrányt.
- * Az Ink a stdin-t raw módban tartja, és nézet-váltáskor NEM dobja el a
- * bemeneti puffert. A gh-hívás KÖZBEN leütött 'y' tehát a confirm ekrán
- * mountolása UTÁN kerül feldolgozásra, egyenest a megerősítés-ágba — a user
- * ELOLVASTA volna az ekrányt, de nem kapott rá esélyt, és mégis elindult a
- * token-költő `claude -p`. Éles PR-on (#911, 100 fájl) ez valódi költés.
+ * WHY IT'S NEEDED: `askAiReview` does BLOCKING synchronous I/O (`gh pr view
+ * --json files`, ~1 second on a live PR), then opens the confirmation
+ * screen. Ink keeps stdin in raw mode, and does NOT drop the input buffer on
+ * a view switch. A 'y' struck DURING the gh call is thus processed AFTER
+ * the confirm screen mounts, going straight into the confirmation branch —
+ * the user WOULD HAVE READ the screen, but never got the chance, and the
+ * token-spending `claude -p` started anyway. On a live PR (#911, 100 files)
+ * that's real spend.
  *
- * MIÉRT NEM ELÉG A `busy` GUARD: a `setBusy(true)` és a `setBusy(false)`
- * UGYANABBAN a szinkron blokkban fut (try/finally), tehát a React sosem
- * RENDEREL `busy === true` állapotot. A useInput handler egy pufferelt
- * keypressnél mindig `busy === false`-ot lát — a guard strukturálisan
- * képtelen elkapni ezt az esetet.
+ * WHY THE `busy` GUARD ISN'T ENOUGH: `setBusy(true)` and `setBusy(false)`
+ * run in the SAME synchronous block (try/finally), so React never RENDERS a
+ * `busy === true` state. The useInput handler always sees `busy === false`
+ * for a buffered keypress — the guard is structurally incapable of catching
+ * this case.
  *
- * A KAPU ASZIMMETRIÁJA SZÁNDÉKOS: csak a megerősítést késleltetjük, a
- * megszakítást SOHA. A dwell a KÖLTÉST védi; a megszakítás ingyen van, tehát
- * egy pufferelt keypress is elvégezheti — az a biztonságos irány (fail-closed).
+ * THE GATE'S ASYMMETRY IS DELIBERATE: we only delay the confirmation, NEVER
+ * the cancellation. The dwell protects the SPEND; cancelling is free, so a
+ * buffered keypress can go ahead and do it too — that's the safe direction
+ * (fail-closed).
  */
 export function confirmAccepts(state, input) {
   if (input !== 'y') return false
   const armedAt = state?.armedAt
-  // Ha nincs arm-időpont, a kapu ZÁRVA van: a hiányzó mérésből nem következtetünk
-  // engedélyre (ugyanaz a fail-closed elv, mint a merge/AI-blokkolóknál).
+  // If there's no arm timestamp, the gate is CLOSED: we don't infer
+  // permission from a missing measurement (same fail-closed principle as
+  // the merge/AI blockers).
   if (typeof armedAt !== 'number' || !Number.isFinite(armedAt)) return false
   const now = typeof state?.now === 'number' ? state.now : Date.now()
   return now - armedAt >= CONFIRM_DWELL_MS
 }
 
 /**
- * A megerősítő ekrán tartalma — a PR MÉRETE, a scope, a kizártak és a PLAFON.
+ * The confirmation screen's content — the PR's SIZE, the scope, the
+ * excluded files, and the CAP.
  *
- * Miért a plafon és nem a becslés: a becslés (token × ár) az agent-fanout miatt
- * nagyságrendet téveszthet, a `--max-budget-usd` viszont hard korlát. Ha a
- * fejlesztő a plafont látja, a legrosszabb esetet látja — az a tájékozott döntés.
+ * Why the cap and not an estimate: an estimate (tokens × price) can be off
+ * by an order of magnitude because of the agent fan-out, whereas
+ * `--max-budget-usd` is a hard limit. If the developer sees the cap, they
+ * see the worst case — that's the informed decision.
  */
-// A `model` PARAMÉTER KIVEZETVE (5b): a modell nem a summary statikus sora,
-// hanem a megerősítés VÁLTHATÓ mezője (modelLine) — két megjelenítő ugyanarra
-// a tényre pontosan az az elcsúszás-osztály, amit a budget-sornál már kizártunk.
+// The `model` PARAMETER REMOVED (5b): the model isn't a static line in the
+// summary, it's the confirmation's SWITCHABLE field (modelLine) — two
+// renderers for the same fact is exactly the drift class we already ruled
+// out for the budget row.
 export function aiReviewSummary({ pr, files, maxBudgetUsd }) {
   const { scope, excluded } = aiReviewScope(files)
   const additions = files.reduce((a, f) => a + (f.additions ?? 0), 0)
@@ -465,62 +499,68 @@ export function aiReviewSummary({ pr, files, maxBudgetUsd }) {
   const exAdd = excluded.reduce((a, f) => a + f.additions + f.deletions, 0)
 
   const lines = []
-  lines.push(`#${pr} — ${files.length} fájl, +${additions} / -${deletions} sor`)
+  lines.push(`#${pr} — ${files.length} files, +${additions} / -${deletions} lines`)
   if (large) {
     lines.push(
-      `FIGYELEM: ez NAGY PR (${files.length} fájl, ${churn} sor churn). Az AI-review `
-      + 'ezen sok tokent fogyaszt, és a findingok átolvasása is hosszú lesz.',
+      `WARNING: this is a LARGE PR (${files.length} files, ${churn} lines of churn). The AI review `
+      + 'will consume a lot of tokens on this, and reading through the findings will take a while.',
     )
   }
-  lines.push(`Review-scope: ${scope.length} fájl.`)
+  lines.push(`Review scope: ${scope.length} files.`)
   if (excluded.length > 0) {
-    // A kizárt fájlok NEVE látszik (legfeljebb 5 + maradék), mert a "13 fájl
-    // kihagyva" nem auditálható állítás.
+    // The excluded files' NAMES show (up to 5 + a remainder), because "13
+    // files excluded" isn't an auditable claim.
     const shown = excluded.slice(0, 5).map((e) => `${e.path} (${e.reason})`)
     const rest = excluded.length - shown.length
     lines.push(
-      `Kihagyva ${excluded.length} generált/lock fájl (${exAdd} sor churn): `
-      + shown.join(', ') + (rest > 0 ? `, +${rest} további` : ''),
+      `Excluded ${excluded.length} generated/lock files (${exAdd} lines of churn): `
+      + shown.join(', ') + (rest > 0 ? `, +${rest} more` : ''),
     )
-    lines.push('Amit az AI kihagy, azt NEKED kell átnézned, ha számít.')
+    lines.push('Whatever the AI excludes, YOU need to review it, if it matters.')
   }
-  // AZ ELŐFELTÉTEL KIMONDVA: a findingok a HUNK SESSIONBE kerülnek, tehát élő
-  // session kell erre a repóra. A user-jelentett #904-es hibában ez pont azért
-  // vált érthetetlenné, mert a UI SEHOL nem mondta ki az előfeltételt — csak a
-  // bukás után jött egy nyers hunk-stderr. A szöveg a KÖZÖS HUNK_SESSION_HINT,
-  // hogy a hiba-üzenettel ne csúszhasson szét.
+  // THE PRECONDITION IS STATED: findings go into the HUNK SESSION, so this
+  // repo needs a live session. In the user-reported #904 bug this turned
+  // unintelligible for exactly this reason — the UI stated the precondition
+  // NOWHERE — only a raw hunk-stderr came after the failure. The text is the
+  // SHARED HUNK_SESSION_HINT, so it can't drift apart from the error
+  // message.
   //
-  // A PÁRHUZAMOS MODELL KIMONDVA a megerősítés ELŐTT: a user tudja, hogy (a) a
-  // diff MEG FOG NYÍLNI (a terminált átveszi a hunk), és (b) a review a
-  // HÁTTÉRBEN fut, tehát a findingok a szeme előtt jelennek meg. Enélkül a
-  // megerősítés utáni terminál-átvétel MAGYARÁZAT NÉLKÜL csapódna be — és a
-  // #904-es bejelentés magja pont az volt, hogy a UI nem mondta ki, mi történik.
+  // THE PARALLEL MODEL IS STATED BEFORE the confirmation: the user knows
+  // that (a) the diff WILL OPEN (the hunk takes over the terminal), and (b)
+  // the review runs in the BACKGROUND, so the findings appear before their
+  // eyes. Without this, the post-confirmation terminal takeover would land
+  // WITHOUT EXPLANATION — and the core of the #904 report was exactly that
+  // the UI didn't state what was happening.
   //
-  // A `HUNK_SESSION_HINT` ELMARADT INNEN: a TUI mostantól MAGA nyitja meg a
-  // sessiont, tehát a "nyiss egyet" felszólítás itt már félrevezető lenne (a
-  // usernek nincs mit tennie). A hint a HIBA-úton marad, ahol tényleg kell.
+  // `HUNK_SESSION_HINT` IS LEFT OUT HERE: the TUI now opens the session
+  // ITSELF, so the "open one" instruction would be misleading here (the user
+  // has nothing to do). The hint stays on the ERROR path, where it's
+  // actually needed.
   lines.push('')
   lines.push(
-    'A review a HÁTTÉRBEN fut, a progresszt EZ A panel mutatja. A findingok a hunk '
-    + 'sessionbe kerülnek (élő session nélkül a review válaszából töltjük be), és a '
-    + 'hunk akkor nyílik meg, amikor VAN MIT látni.',
+    'The review runs in the BACKGROUND, THIS panel shows the progress. The findings go into the hunk '
+    + 'session (without a live session we load them from the review response), and the '
+    + 'hunk opens when there IS SOMETHING to see.',
   )
-  // A PLAFON-SOR CSAK AKKOR VAN, HA VAN PLAFON. Defaultban nincs (lásd a
-  // budget-fejezetet), és egy "Költés-plafon: --max-budget-usd undefined" sor
-  // rosszabb, mint a hallgatás: azt állítaná, hogy van védelem. A kikapcsolt
-  // állapotot a UI hangsúlytalan budget-sora mondja ki ("budget: off"), nem ez.
+  // THE CAP ROW ONLY EXISTS IF THERE IS A CAP. By default there isn't (see
+  // the budget chapter), and a "Spend cap: --max-budget-usd undefined" row
+  // would be worse than silence: it would claim there's protection. The
+  // disabled state is stated by the UI's unemphasized budget row ("budget:
+  // off"), not this.
   //
-  // AMI SZÁNDÉKOSAN NINCS ITT: a "ez a TE saját tokenjeidet fogyasztja" mondat. A
-  // user kifogása szerint felesleges — a fejlesztő tudja, hogy a lokális
-  // credentialját használja. A felelősség-modell leírása a modul fejében és a
-  // docs-ban él, nem a UI-ban.
+  // WHAT'S DELIBERATELY NOT HERE: the "this consumes YOUR OWN tokens"
+  // sentence. Per the user's complaint it's unnecessary — the developer
+  // knows it uses their local credential. The responsibility model's
+  // description lives in the module's header and in the docs, not in the
+  // UI.
   const hasBudget = Number.isFinite(Number(maxBudgetUsd)) && Number(maxBudgetUsd) > 0
   if (hasBudget) {
-    lines.push(`Költés-plafon: --max-budget-usd ${maxBudgetUsd} (a claude --help szerint API-költésre vonatkozik)`)
+    lines.push(`Spend cap: --max-budget-usd ${maxBudgetUsd} (per claude --help, applies to API spend)`)
   }
-  // A plafon GÉPILEG is kimegy: a megerősítés y-ága EZT adja tovább a claude-nak,
-  // hogy a user pontosan azt a plafont kapja, amit az ekrányon LÁTOTT. Ha a
-  // futtató máshonnan számolná újra, a megjelenített és az élő plafon szétcsúszhat.
+  // The cap ALSO goes out MECHANICALLY: the confirmation's y-branch passes
+  // THIS on to claude, so the user gets exactly the cap they SAW on the
+  // screen. If the runner recomputed it from elsewhere, the displayed and
+  // the live cap could drift apart.
   return {
     fileCount: files.length, additions, deletions, churn, large, scope, excluded,
     maxBudgetUsd: hasBudget ? maxBudgetUsd : undefined,

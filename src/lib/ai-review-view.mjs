@@ -1,90 +1,101 @@
-// tuipr — AI-REVIEW-VIEW: az AI-review LÁTHATÓSÁGA.
+// tuipr — AI-REVIEW-VIEW: the AI review's VISIBILITY.
 //
-// Ami itt lakik: az eltelt-idő formázó, a progressz-címke, a HÉT végállapot
-// leképezése, az `r` életciklus-kulcs és címke, valamint a panel AI-szekciójának
-// sorai.
+// What lives here: the elapsed-time formatter, the progress label, the
+// mapping of the SEVEN end states, the `r` lifecycle key and its label, and
+// the rows of the panel's AI section.
 //
-// KÜLÖN A RUN-TÓL, mert ez TISZTA FORMÁZÁS (a tesztek is így fedik): a
-// végrehajtás mellékhatásos, a megjelenítés nem. A run IMPORTÁLJA innen az
-// AI_REVIEW_TIMEOUT_MS-t (a watchdoghoz) — az irány EGYIRÁNYÚ, a view SEMMIT nem
-// kér a runtól (mérve).
+// SEPARATE FROM RUN, because this is PURE FORMATTING (the tests cover it
+// this way too): execution has side effects, rendering doesn't. run IMPORTS
+// AI_REVIEW_TIMEOUT_MS from here (for the watchdog) — the direction is
+// ONE-WAY, view requests NOTHING from run (measured).
 //
-// RÉTEGREND: lefelé importál (layout: a panel-sorok CELLÁBAN mért tördelése).
+// LAYERING: imports downward (layout: the panel rows' measured wrapping in
+// CELLS).
 import { clampCells, wrapCells } from './layout.mjs'
 import process from 'node:process'
 
-// === A HÁTTÉR-REVIEW LÁTHATÓSÁGA ==========================================
+// === THE BACKGROUND REVIEW'S VISIBILITY ====================================
 //
-// A USER JELENTÉSE (#904), szó szerint: "a 904-esre indítottam review-t, de ez
-// egy pár soros változtatás, és 5 perc alatt se látok semmi feedbacket sehol,
-// még a fenti üzenetet írja az app. […] Most néhány óra múlva ránéztem, és azt
-// írja, »megszakítva«. Ez így nem túl jó élmény."
+// THE USER'S REPORT (#904), verbatim: "I started a review on #904, but it's
+// just a few lines of change, and after 5 minutes I see no feedback
+// anywhere, the app still shows the message above. […] I checked back a few
+// hours later, and it says 'aborted'. This isn't a great experience."
 //
-// A DIAGNÓZIS HÁROM, EGYMÁSTÓL FÜGGETLEN HIBÁT talált — és a "megszakítva" NEM
-// az volt, aminek látszott:
+// THE DIAGNOSIS found THREE, MUTUALLY INDEPENDENT bugs — and the "aborted"
+// was NOT what it looked like:
 //
-//  1. A `done` promise ÖRÖKRE PENDING maradt (lásd a `startAgentReview` close-
-//     ágának kommentjét). A `showError` tehát SOSEM futott le, a status-sor pedig
-//     örökre "az AI-review a HÁTTÉRBEN fut"-on állt. Ez a "5 perc alatt semmi
-//     feedback" gyökere.
-//  2. NEM VOLT PROGRESSZ: a statikus status kiíródott, és onnantól semmi. A
-//     `--output-format json` mérve EGY nagy JSON-t ad a VÉGÉN (stdout közben
-//     ÜRES), tehát streamelni nem is volt mit.
-//  3. A VÉGÁLLAPOTOK ÖSSZEMOSÓDTAK: egyetlen `if (outcome.aborted)` ág írta a
-//     "megszakítva"-t, ami HAZUG minden olyan esetben, amit nem a user váltott ki.
+//  1. The `done` promise stayed PENDING FOREVER (see the comment on
+//     `startAgentReview`'s close branch). `showError` therefore NEVER ran,
+//     and the status line stayed on "the AI review is running in the
+//     BACKGROUND" forever. This is the root of "no feedback after 5
+//     minutes".
+//  2. THERE WAS NO PROGRESS: the static status got printed, and nothing
+//     after that. `--output-format json`, measured, gives ONE big JSON at
+//     the END (stdout EMPTY in between), so there was nothing to stream in
+//     the first place.
+//  3. THE END STATES GOT MIXED TOGETHER: a single `if (outcome.aborted)`
+//     branch wrote "aborted", which is a LIE in every case not triggered by
+//     the user.
 //
-// A MÉRT IDŐK (mobile `claude-code-review.yml`, n=76 sikeres run, két beragadt
-// outlier kiszűrve): p50 = 440 s (7:20), p75 = 619 s, p90 = 1037 s (17:17),
-// p95 = 1186 s, max = 1866 s (31:06). A user 5 perces várakozása tehát a MEDIÁN
-// ALATT volt: a feature nem lassú — a VISSZAJELZÉS hiányzott. Ezért a jelzés
-// KIMONDJA a tipikus időt: a "2:14 / tipikus 7:20" pár önmagában megnyugtat.
+// THE MEASURED TIMES (mobile `claude-code-review.yml`, n=76 successful
+// runs, two stuck outliers filtered out): p50 = 440 s (7:20), p75 = 619 s,
+// p90 = 1037 s (17:17), p95 = 1186 s, max = 1866 s (31:06). The user's
+// 5-minute wait was therefore BELOW THE MEDIAN: the feature isn't slow —
+// the FEEDBACK was missing. That's why the signal STATES the typical time
+// outright: a "2:14 / typical 7:20" pair reassures on its own.
 
 /**
- * A HÁTTÉR-REVIEW PLAFONJA. A MÉRT maximum (31:06) közelében: a legitim hosszú
- * review-kat NEM vágja el, a végtelen lógást igen.
+ * THE BACKGROUND REVIEW'S CEILING. Close to the MEASURED maximum (31:06):
+ * it doesn't cut off legitimate long reviews, but it does cut off infinite
+ * hangs.
  *
- * MIÉRT SAJÁT WATCHDOG és nem CLI-flag: a `claude --help` (2.1.220) mérve NEM
- * ismer se `--timeout`-ot, se `--max-turns`-t. Ami van (`--max-budget-usd`), az
- * API-költésre való — a user viszont subscription-limitet fogyaszt, ott nincs mit
- * dollárban vágni. A plafon tehát a MI felelősségünk.
+ * WHY OUR OWN WATCHDOG and not a CLI flag: `claude --help` (2.1.220),
+ * measured, doesn't know `--timeout` or `--max-turns`. What exists
+ * (`--max-budget-usd`) is for API spend — the user, though, consumes a
+ * subscription limit, and there's nothing to cut in dollars there. The
+ * ceiling is therefore OUR responsibility.
  */
 export const AI_REVIEW_TIMEOUT_MS = Number(process.env.TUIPR_NEXT_AI_REVIEW_TIMEOUT_MS) > 0
   ? Number(process.env.TUIPR_NEXT_AI_REVIEW_TIMEOUT_MS)
   : 1_800_000
 
 /**
- * A TIPIKUS (p50) idő — MÉRT, nem becsült. EZT MUTATJUK a usernek: az eltelt idő
- * önmagában nem információ ("2:14" — sok? kevés?), a tipikushoz mérve az.
+ * THE TYPICAL (p50) time — MEASURED, not estimated. THIS IS WHAT WE SHOW the
+ * user: the elapsed time alone isn't information ("2:14" — is that a lot?
+ * a little?), measured against the typical it becomes one.
  */
 export const AI_REVIEW_TYPICAL_MS = 440_000
 
-/** A p90 — e fölött a jelzés már FIGYELMEZTET, nem megnyugtat. */
+/** The p90 — above this the signal starts to WARN rather than reassure. */
 export const AI_REVIEW_P90_MS = 1_037_000
 
 /**
- * A "hosszú futás" küszöbe: eddig számolunk, utána a hangnem is változik
- * ("még fut, ez normális nagy PR-nál"). A user 2 percnél már bizonytalan volt.
+ * The threshold of "long run": we count up to here, after which the tone
+ * changes too ("still running, that's normal for a big PR"). The user was
+ * already unsure at 2 minutes.
  */
 export const AI_REVIEW_LONG_MS = 120_000
 
 /**
- * Az ELTELT IDŐ `m:ss` alakban.
+ * ELAPSED TIME in `m:ss` form.
  *
- * MIÉRT NEM `134s`: a perc-érzet a döntéshez kell (a tipikus 7:20-hoz mérve),
- * és a másodperc-szám azt nem adja meg. A másodperc NULLÁVAL FELTÖLTÖTT: a `2:4`
- * félreolvasható, és a sor szélessége ugrálna minden ticknél.
+ * WHY NOT `134s`: the minute-sense is needed for the decision (measured
+ * against the typical 7:20), and a raw second count doesn't give that. The
+ * seconds are ZERO-PADDED: `2:4` is easy to misread, and the row's width
+ * would jitter on every tick.
  *
- * FAIL-CLOSED: egy negatív vagy nem-szám bemenet DOB. Egy `-1:-1` alak a
- * status-sorban némán hazudna a mérésről — pontosan az az osztály, amit a
- * feature máshol mindenhol tilt.
+ * FAIL-CLOSED: a negative or non-number input THROWS. A `-1:-1` shape in
+ * the status line would silently lie about the measurement — exactly the
+ * class the feature forbids everywhere else.
  */
 export function formatElapsed(ms) {
-  // A TÍPUS-ELLENŐRZÉS SZIGORÚ, NEM `Number()`-KONVERZIÓ. MÉRT CSAPDA:
-  // `Number(null) === 0` és `Number('') === 0`, tehát egy hiányzó mérés NÉMÁN
-  // "0:00"-t adna — a status-sor azt mutatná, hogy a review épp most indult,
-  // miközben nincs is mérés. Pontosan az a néma hazugság, amit a feature tilt.
+  // THE TYPE CHECK IS STRICT, NOT a `Number()` CONVERSION. MEASURED TRAP:
+  // `Number(null) === 0` and `Number('') === 0`, so a missing measurement
+  // would SILENTLY give "0:00" — the status line would show the review as
+  // having just started, even though there's no measurement at all. Exactly
+  // the silent lie the feature forbids.
   if (typeof ms !== 'number' || !Number.isFinite(ms) || ms < 0) {
-    throw new Error(`az eltelt idő nem MÉRT érték: ${JSON.stringify(ms)}`)
+    throw new Error(`elapsed time is not a MEASURED value: ${JSON.stringify(ms)}`)
   }
   const n = ms
   const total = Math.floor(n / 1000)
@@ -94,69 +105,79 @@ export function formatElapsed(ms) {
 }
 
 /**
- * A FUTÓ háttér-review status-sora — a "él-e még?" kérdés válasza.
+ * THE RUNNING background-review status line — the answer to "is it still
+ * alive?".
  *
- * A HÁROM INFORMÁCIÓ, a hasznosság sorrendjében:
- *  1. ELTELT IDŐ + TIPIKUS IDŐ — ez egyedül megválaszolja a user kérdését;
- *  2. FINDING-SZÁM — a VALÓDI progressz ("3 finding beírva"), a hunk-session
- *     periodikus olvasásából (MÉRT költség: 0.42 s/hívás élő TUI mellett);
- *  3. TOOL-JELZÉS — a `stream-json` `tool_use` blokkjaiból (MÉRT: a stream
- *     azonnal ad `system/init`-et, majd per-message tool_use-t).
+ * THE THREE PIECES OF INFORMATION, in order of usefulness:
+ *  1. ELAPSED TIME + TYPICAL TIME — this alone answers the user's question;
+ *  2. FINDING COUNT — the REAL progress ("3 findings written"), from
+ *     periodic reads of the hunk session (MEASURED cost: 0.42 s/call
+ *     alongside a live TUI);
+ *  3. TOOL SIGNAL — from the `stream-json` `tool_use` blocks (MEASURED: the
+ *     stream immediately gives `system/init`, then per-message tool_use).
  *
- * A MEGSZAKÍTÁSI ÚT MINDIG BENNE VAN: a user 5 percig nem tudta, leállíthatja-e.
+ * THE ABORT PATH IS ALWAYS INCLUDED: the user didn't know for 5 minutes
+ * whether they could stop it.
  */
 export function aiReviewProgressLabel({ pr, elapsedMs, findings = 0, tool = null, xArmed = false }) {
   const elapsed = formatElapsed(elapsedMs)
-  // A "HÁTTÉRBEN" SZÓ BENNE MARAD: ez a jelzés VÁLTJA FEL a régi statikus
-  // status-sort, tehát ugyanazt a szerződést kell vinnie — a user innen tudja,
-  // hogy a TUI HASZNÁLHATÓ marad (navigálhat, panelt zárhat), miközben a review
-  // fut. A régi teszt (`a háttér-review ALATT a TUI RESZPONZÍV marad`) épp ezt
-  // a szót őrzi, és jogosan: enélkül a jelzés úgy olvasható, mint egy blokkoló
-  // művelet progressze.
-  const parts = [`#${pr}: AI-review a HÁTTÉRBEN — ${elapsed}`]
-  // A TIPIKUS IDŐ a HORGONY: enélkül az eltelt idő puszta szám.
+  // THE WORD "BACKGROUND" STAYS IN: this signal REPLACES the old static
+  // status line, so it has to carry the same contract — the user knows from
+  // this that the TUI stays USABLE (can navigate, close the panel) while
+  // the review runs. The old test ("the TUI stays RESPONSIVE DURING a
+  // background review") guards exactly this word, and rightly so: without
+  // it the signal reads like the progress of a blocking operation.
+  const parts = [`#${pr}: AI review running in the BACKGROUND — ${elapsed}`]
+  // THE TYPICAL TIME IS THE ANCHOR: without it, the elapsed time is a bare
+  // number.
   if (elapsedMs >= AI_REVIEW_P90_MS) {
-    // A p90 FÖLÖTT figyelmeztetünk: itt már tényleg hosszabb a szokásosnál.
-    parts.push(`a szokásosnál hosszabb (p90: ${formatElapsed(AI_REVIEW_P90_MS)})`)
+    // ABOVE p90 we warn: at this point it really is longer than usual.
+    parts.push(`longer than usual (p90: ${formatElapsed(AI_REVIEW_P90_MS)})`)
   } else if (elapsedMs >= AI_REVIEW_LONG_MS) {
-    // 2 PERC FÖLÖTT MEGNYUGTATUNK. A user kifogása épp az volt, hogy 5 perc után
-    // sem tudta, baj-e — a tipikus 7:20 mellett nem volt.
-    parts.push(`még fut, nagy PR-nál ez normális (tipikus: ${formatElapsed(AI_REVIEW_TYPICAL_MS)})`)
+    // ABOVE 2 MINUTES WE REASSURE. The user's complaint was precisely that
+    // even after 5 minutes they didn't know if something was wrong —
+    // against the typical 7:20, it wasn't.
+    parts.push(`still running, normal for a big PR (typical: ${formatElapsed(AI_REVIEW_TYPICAL_MS)})`)
   } else {
-    parts.push(`tipikus: ${formatElapsed(AI_REVIEW_TYPICAL_MS)}`)
+    parts.push(`typical: ${formatElapsed(AI_REVIEW_TYPICAL_MS)}`)
   }
-  // A FINDING-SZÁM a VALÓDI progressz — de csak ha van mit mondani (a "0 finding
-  // beírva" az első másodpercben zaj lenne).
-  if (Number(findings) > 0) parts.push(`${Number(findings)} finding beírva`)
+  // THE FINDING COUNT is the REAL progress — but only when there's
+  // something to say ("0 findings written" in the first second would just
+  // be noise).
+  if (Number(findings) > 0) parts.push(`${Number(findings)} findings written`)
   if (tool) parts.push(String(tool))
-  // A MEGSZAKÍTÁS billentyűje LÁTHATÓ, a jelzés VÉGÉN. A DUPLA-X megerősítés
-  // (a user kérése, szó szerint): az első `x` után a címke "megszakítás
-  // megerősítése"-re vált — a második `x` hajt végre, bármely más gomb visszavon.
-  parts.push(xArmed ? 'x: megszakítás megerősítése' : 'x: megszakítás')
+  // THE ABORT KEY IS VISIBLE, at the END of the signal. THE DOUBLE-X
+  // confirmation (the user's request, verbatim): after the first `x` the
+  // label switches to "confirm abort" — the second `x` executes, any other
+  // key cancels.
+  parts.push(xArmed ? 'x: confirm abort' : 'x: abort')
   return parts.join(' · ')
 }
 
 /**
- * A HÁTTÉR-REVIEW VÉGÁLLAPOTAI — HÉT ÁG, MINDEGYIK SAJÁT üzenettel.
+ * THE BACKGROUND REVIEW'S END STATES — SEVEN BRANCHES, EACH WITH ITS OWN
+ * MESSAGE.
  *
- * EZ A JAVÍTÁS LÉNYEGE. A régi kód EGYETLEN ágat ismert:
- *   `if (outcome.aborted) setStatus('az AI-review megszakítva')`
- * — és a user ezt látta órák múlva egy permission-megtagadásba futott review
- * után. A "megszakítva" azt ÁLLÍTJA, hogy a USER döntött; ha nem ő döntött, ez
- * hazug jelzés, és a legrosszabb fajta: elviszi a valódi ok (és a javítás) elől.
+ * THIS IS THE POINT OF THE FIX. The old code knew ONE branch:
+ *   `if (outcome.aborted) setStatus('the AI review was aborted')`
+ * — and the user saw this hours later, after a review that had run into a
+ * permission denial. "Aborted" ASSERTS that the USER decided; if they
+ * didn't, this is a lying signal, and the worst kind: it takes the real
+ * cause (and the fix) away from view.
  *
- * A HÉT ÁG NEM STÍLUS-KÉRDÉS: mindegyik MÁS TEENDŐT ír elő a usernek.
- *   `done`           → nézd át a findingokat (`d` nyitja meg), majd `f`
- *   `done-answer`    → a hunk nem élt: a findingok a VÁLASZBÓL eltárolva —
- *                      a `d` betölti őket (a hibrid (c) ág)
- *   `no-findings`    → nincs teendő, de tudd, hogy LEFUTOTT (nem hiba)
- *   `aborted`        → te szakítottad meg; `r` újraindít
- *   `timeout`        → a plafon lejárt; emeld a plafont vagy szűkítsd a PR-t
- *   `failed`         → a claude elhasalt; a stderr mondja, mit
- *   `killed-by-exit` → a TUI bezárása ölte meg; NE zárd be, amíg fut
+ * THE SEVEN BRANCHES AREN'T A STYLE CHOICE: each prescribes a DIFFERENT
+ * ACTION for the user.
+ *   `done`           → review the findings (`d` opens them), then `f`
+ *   `done-answer`    → the hunk wasn't alive: findings stored from the
+ *                      RESPONSE — `d` loads them (the hybrid (c) branch)
+ *   `no-findings`    → nothing to do, but know it RAN (not an error)
+ *   `aborted`        → you aborted it; `r` restarts
+ *   `timeout`        → the ceiling ran out; raise the ceiling or narrow the PR
+ *   `failed`         → claude crashed; stderr says what
+ *   `killed-by-exit` → closing the TUI killed it; DON'T close it while it runs
  *
- * FAIL-CLOSED: ismeretlen `kind`-re DOB. Egy néma default szöveg pontosan a régi
- * gyűjtőág visszacsempészése lenne, csak most rejtve.
+ * FAIL-CLOSED: an unknown `kind` THROWS. A silent default text would be
+ * exactly the old catch-all branch smuggled back in, just hidden now.
  */
 export function aiReviewOutcome(o) {
   const pr = o?.pr
@@ -169,15 +190,16 @@ export function aiReviewOutcome(o) {
         kind: 'done',
         isError: false,
         message:
-          `#${pr}: ${o.added} AI-finding a hunk sessionbe írva (${meta}). `
-          + "Nézd át őket ('d'), töröld a rosszakat, majd 'f' a feltöltéshez.",
+          `#${pr}: ${o.added} AI findings written into the hunk session (${meta}). `
+          + "Review them ('d'), delete the bad ones, then 'f' to upload.",
       }
     }
     case 'done-answer': {
-      // A HIBRID (c) ág: a hunk-session nem élt (vagy megszűnt), de a findingok
-      // a review VÁLASZÁBÓL eltárolódtak. A "futtasd újra" típusú üzenet itt
-      // TILOS: a költés megtörtént, és a válasz-JSON pontosan azért van, hogy
-      // ne kelljen újrakölteni — a következő lépés a BETÖLTÉS, nem a review.
+      // THE HYBRID (c) branch: the hunk session wasn't alive, but the
+      // findings were stored FROM THE REVIEW'S RESPONSE. A "run it again"
+      // style message is FORBIDDEN here: the spend already happened, and
+      // the response JSON exists exactly so a re-spend isn't needed — the
+      // next step is LOADING, not reviewing.
       const meta = [o.reviewPath, o.model ?? '?', o.costUsd === undefined || o.costUsd === null ? '$?' : `$${o.costUsd}`]
         .filter((x) => x !== undefined && x !== null)
         .join(', ')
@@ -185,152 +207,162 @@ export function aiReviewOutcome(o) {
         kind: 'done-answer',
         isError: false,
         message:
-          `#${pr}: ${o.added} AI-finding a review válaszából ELTÁROLVA (${meta}) — a hunk-session `
-          + 'nem élt a futás alatt, de a findingok NEM vesztek el. '
-          + 'Az `r` a PR-panelen megnyitja a hunkban és betölti őket.',
+          `#${pr}: ${o.added} AI findings STORED from the review's response (${meta}) — the hunk session `
+          + 'wasn\'t alive during the run, but the findings were NOT lost. '
+          + '`r` on the PR panel opens the hunk and loads them.',
       }
     }
     case 'no-findings':
-      // NEM HIBA-OVERLAY: a gate dobása korábban "AI-review hiba"-ként mutatta,
-      // holott a leggyakoribb ok az, hogy tényleg nincs mit jelenteni. A
-      // hangnem viszont NEM megnyugtató sem: a mért csapda szerint egy le sem
-      // futott review is adhat 0 findingot, tehát a usernek tudnia kell, hogy
-      // az `r` újrafuttatás legitim válasz.
+      // NOT AN ERROR OVERLAY: the gate throwing used to show this as an
+      // "AI review error", when the most common cause is that there simply
+      // was nothing to report. The tone, though, isn't purely reassuring
+      // either: per the measured trap, even a review that never ran can
+      // give 0 findings, so the user needs to know that `r` re-running is a
+      // legitimate response.
       return {
         kind: 'no-findings',
         isError: false,
         message:
-          `#${pr}: az AI-review LEFUTOTT, de egyetlen findingot sem írt be `
-          + `(${o.before ?? 0} volt, ${o.after ?? 0} van). Ez lehet jó hír (nincs defekt), `
-          + "de a sikeres burkoló ezt nem bizonyítja — ha kételkedsz, 'r' újraindítja.",
+          `#${pr}: the AI review RAN, but wrote no findings at all `
+          + `(${o.before ?? 0} before, ${o.after ?? 0} after). This could be good news `
+          + "(no defects), but the successful envelope doesn't prove it — if in doubt, 'r' restarts it.",
       }
     case 'aborted':
-      // CSAK a VALÓDI user-megszakításra. Az `x` (a status-soron hirdetett út).
+      // ONLY for a REAL user abort. The `x` (the path advertised on the
+      // status line).
       return {
         kind: 'aborted',
         isError: false,
         message:
-          `#${pr}: te szakítottad meg az AI-review-t ('x') — a hunk sessionbe addig beírt `
-          + "findingok MEGMARADTAK ('d' megnyitja őket). Az 'r' újraindítja a review-t.",
+          `#${pr}: you aborted the AI review ('x') — the findings written into the hunk session so far `
+          + "REMAIN ('d' opens them). 'r' restarts the review.",
       }
     case 'timeout':
       return {
         kind: 'timeout',
         isError: false,
         message:
-          `#${pr}: az AI-review IDŐTÚLLÉPÉSSEL leállt (${formatElapsed(o.timeoutMs ?? AI_REVIEW_TIMEOUT_MS)} `
-          + `plafon; a mért tipikus ${formatElapsed(AI_REVIEW_TYPICAL_MS)}, a leghosszabb mért 31:06). `
-          + 'A már beírt findingok megmaradtak. Mit tegyél: nézd meg őket a `d`-vel, és ha a PR '
-          + 'tényleg nagy, emeld a plafont (`TUIPR_NEXT_AI_REVIEW_TIMEOUT_MS`) vagy indítsd újra `r`-rel.',
+          `#${pr}: the AI review stopped on TIMEOUT (${formatElapsed(o.timeoutMs ?? AI_REVIEW_TIMEOUT_MS)} `
+          + `ceiling; the measured typical is ${formatElapsed(AI_REVIEW_TYPICAL_MS)}, the longest measured 31:06). `
+          + 'The findings already written remain. What to do: check them with `d`, and if the PR is '
+          + 'genuinely large, raise the ceiling (`TUIPR_NEXT_AI_REVIEW_TIMEOUT_MS`) or restart with `r`.',
       }
     case 'failed': {
-      // A STDERR ELSŐ SORA: a status-sor EGYSOROS, és a többsoros stack a
-      // lényeget elnyomná. A teljes szöveg a hiba-overlayben él.
-      const first = String(o.stderr ?? '').split('\n').map((l) => l.trim()).filter((l) => l !== '')[0] ?? '(nincs stderr)'
-      // A SZIGNÁLLAL MEGÖLT PROCESSZ SAJÁT ÁG — a #904-es hibaosztály MARADVÁNYA.
+      // THE FIRST LINE OF STDERR: the status line is ONE LINE, and a
+      // multi-line stack trace would bury the point. The full text lives in
+      // the error overlay.
+      const first = String(o.stderr ?? '').split('\n').map((l) => l.trim()).filter((l) => l !== '')[0] ?? '(no stderr)'
+      // THE SIGNAL-KILLED PROCESS GETS ITS OWN BRANCH — the REMAINING piece
+      // of the #904 error class.
       //
-      // MÉRT TÉNY: ha a `claude`-ot NEM mi öljük meg (OOM-killer, `pkill`, a gép
-      // elalvása, a shell SIGHUP-ja), a Node `close` eseménye `code === null`-t
-      // ad — a kilépés SZIGNÁLLAL történt, nem kóddal. Izoláltan mérve a
-      // `parseAgentReviewEnvelope` `status !== 0` ága elkapja, `exitCode: null`-lal.
+      // MEASURED FACT: if `claude` is NOT killed BY US (OOM killer, `pkill`,
+      // the machine sleeping, the shell's SIGHUP), Node's `close` event
+      // gives `code === null` — the exit happened VIA SIGNAL. Measured in
+      // isolation, `parseAgentReviewEnvelope`'s `status !== 0` branch
+      // catches it, with `exitCode: null`.
       //
-      // A HAZUGSÁG, amit ez leváltja: az `o.exitCode ?? '?'` a `null`-t `'?'`-re
-      // fordította, a stderr pedig üres, tehát a user EZT látta:
-      //   "az AI-review ELHASALT (exit ?): (nincs stderr)"
-      // Ugyanaz a kár, mint a régi "megszakítva"-nál: a szöveg nem mondja meg,
-      // MI történt, nem mondja meg, hogy ez NEM a user hibája, és nem ad teendőt.
-      // Egy ÓRÁKIG futó review után épp ez a legvalószínűbb valódi vég.
+      // THE LIE this replaces: `o.exitCode ?? '?'` turned the `null` into
+      // `'?'`, and stderr was empty, so the user saw THIS:
+      //   "the AI review FAILED (exit ?): (no stderr)"
+      // The same harm as the old "aborted": the text doesn't say WHAT
+      // happened, doesn't say it's NOT the user's fault, and gives no next
+      // step. After a review that ran for HOURS, this is the most likely
+      // real ending.
       if (o.exitCode === null || o.exitCode === undefined) {
-        // A SZIGNÁL NEVE A DIAGNÓZIS, NEM DEKORÁCIÓ. A `close` MÁSODIK
-        // argumentumából jön (a core `startAgentReview`-ja akasztja rá a hibára),
-        // és HÁROM KÜLÖN teendőt jelöl:
-        //   SIGKILL → OOM-killer vagy `kill -9`: a gép memóriája fogyott el, vagy
-        //             valaki erőszakkal ölte meg. Ellenszer: kevesebb párhuzamos
-        //             munka, vagy szűkebb PR.
-        //   SIGTERM → RENDEZETT leállítás kérése (rendszer-shutdown, egy `pkill`,
-        //             egy process-manager). Nem memória-ügy.
-        //   SIGHUP  → a TERMINÁL bezárása / a session megszűnése.
-        // A NÉV NÉLKÜLI ESET SEM HALLGAT: kimondjuk, hogy az okot NEM TUDJUK. A
-        // becsületesség itt a lényeg — a régi "exit ?" épp azt a látszatot adta,
-        // hogy tudunk valamit (egy kódot), holott nem.
+        // THE SIGNAL'S NAME IS THE DIAGNOSIS, NOT DECORATION. It comes from
+        // the SECOND argument of `close` (the core `startAgentReview` hangs
+        // it onto the error), and marks THREE SEPARATE next steps:
+        //   SIGKILL → the OOM killer or `kill -9`: the machine ran out of
+        //             memory, or someone killed it forcibly. Remedy: less
+        //             parallel work, or a narrower PR.
+        //   SIGTERM → an ORDERLY shutdown request (system shutdown, a
+        //             `pkill`, a process manager). Not a memory issue.
+        //   SIGHUP  → the TERMINAL closing / the session ending.
+        // THE NAMELESS CASE ISN'T SILENT EITHER: we state outright that we
+        // DON'T KNOW the cause. Honesty is the point here — the old "exit
+        // ?" gave the impression that we knew something (a code), when we
+        // didn't.
         const sig = typeof o.signal === 'string' && o.signal.trim() !== '' ? o.signal.trim() : null
         const hint = sig === 'SIGKILL'
-          ? ' A `SIGKILL` tipikusan az OOM-killer vagy egy `kill -9` — a gép memóriája fogyhatott el.'
+          ? ' `SIGKILL` is typically the OOM killer or a `kill -9` — the machine may have run out of memory.'
           : sig === 'SIGTERM'
-          ? ' A `SIGTERM` RENDEZETT leállítás kérése volt (rendszer-shutdown, `pkill`, process-manager).'
+          ? ' `SIGTERM` was an ORDERLY shutdown request (system shutdown, `pkill`, process manager).'
           : sig === 'SIGHUP'
-          ? ' A `SIGHUP` a terminál/session megszűnése — a TUI-t futtató shell zárult be.'
+          ? ' `SIGHUP` is the terminal/session ending — the shell running the TUI closed.'
           : ''
         return {
           kind: 'failed',
           isError: true,
           message:
-            `#${pr}: az AI-review-t egy SZIGNÁL ölte meg kívülről `
+            `#${pr}: a SIGNAL killed the AI review from the outside `
             + (sig === null
-              ? '(a processz nem exit-kóddal állt le, és a szignál nevét NEM TUDJUK — az okot '
-                + 'tehát nem tudjuk megnevezni). '
-              : `(\`${sig}\`, nem exit-kóddal állt le).${hint} `)
-            + 'Ez lehet külső beavatkozás: a gép elaludt, az OOM-killer közbelépett, vagy valaki '
-            + '`pkill`-elte a claude-ot — NEM a te hibád, és NEM is review-hiba.'
+              ? '(the process didn\'t exit with a code, and we DON\'T KNOW the signal\'s name — so '
+                + 'we can\'t name the cause). '
+              : `(\`${sig}\`, didn't exit with a code).${hint} `)
+            + 'This could be external intervention: the machine went to sleep, the OOM killer stepped in, or someone '
+            + '`pkill`\'d claude — NOT your fault, and NOT a review error either.'
             + `${String(o.stderr ?? '').trim() === '' ? '' : ` stderr: ${first}`} `
-            + 'A már beírt findingok megmaradtak (`d` megnyitja őket); az `r` újraindítja a review-t.',
+            + 'The findings already written remain (`d` opens them); `r` restarts the review.',
         }
       }
-      // A TOKEN-KÖLTÉS KIMONDVA — MINDKÉT IRÁNYBAN. A "nem költöttünk" nem
-      // mellékes: az a megnyugtató információ, ami eldönti, hogy az újrapróba
-      // ingyen van-e.
+      // THE TOKEN SPEND IS STATED OUTRIGHT — IN BOTH DIRECTIONS. "We didn't
+      // spend" isn't a footnote: it's the reassuring information that
+      // decides whether a retry is free.
       const spend = Number(o.costUsd) > 0
-        ? `tokent KÖLTÖTTÜNK: $${o.costUsd}`
-        : 'tokent NEM költöttünk (vagy nem mérhető)'
+        ? `tokens WERE SPENT: $${o.costUsd}`
+        : 'no tokens were spent (or it isn\'t measurable)'
       return {
         kind: 'failed',
         isError: true,
-        message: `#${pr}: az AI-review ELHASALT (exit ${o.exitCode ?? '?'}): ${first} — ${spend}.`,
+        message: `#${pr}: the AI review FAILED (exit ${o.exitCode ?? '?'}): ${first} — ${spend}.`,
       }
     }
     case 'killed-by-exit':
-      // A KILÉPÉS ölte meg. A user #904-es esetének legvalószínűbb valódi vége,
-      // amit a régi "megszakítva" NEM mondott ki — és amit MOST a kilépés ELŐTT
-      // is megkérdezünk (lásd az app kilépés-figyelmeztetését).
+      // KILLED by the exit. The most likely real ending of the user's #904
+      // case, which the old "aborted" DIDN'T state — and which is NOW asked
+      // about BEFORE the exit too (see the app's exit warning).
       return {
         kind: 'killed-by-exit',
         isError: false,
         message:
-          `#${pr}: az AI-review-t a TUI BEZÁRÁSA szakította meg (a \`claude -p\` a hunk `
-          + 'sessionbe ír, ezért nem hagyhatjuk futni a kilépés után). A már beírt findingok '
-          + 'megmaradtak. Ha végig akarod futtatni, ne lépj ki, amíg fut.',
+          `#${pr}: closing the TUI interrupted the AI review (\`claude -p\` writes into the hunk `
+          + 'session, so it can\'t be left running after exit). The findings already written '
+          + 'remain. If you want it to run to completion, don\'t quit while it\'s running.',
       }
     default:
       throw new Error(
-        `ismeretlen AI-review végállapot: ${JSON.stringify(o?.kind)}. A néma default szöveg `
-        + 'TILOS: pontosan az a gyűjtőág lenne, ami a #904-es hazug "megszakítva"-t adta.',
+        `unknown AI review end state: ${JSON.stringify(o?.kind)}. A silent default text is `
+        + 'FORBIDDEN: it would be exactly the catch-all branch that produced the #904 lying "aborted".',
       )
   }
 }
 
 /**
- * AZ `r` ÉLETCIKLUS-ÁLLAPOTA egy PR-ra: 'idle' | 'running' | 'done'.
+ * THE `r` LIFECYCLE STATE for a PR: 'idle' | 'running' | 'done'.
  *
- * A USER EXPLICIT KÉRÉSE (4. élő teszt): az `r` állapotfüggő kulcs —
- *   idle    → indítás (megerősítő panel, mint eddig);
- *   running → letiltva (a "már fut" hint marad), a lábléc dimmelt jelzést ad;
- *   done    → REVIEW MEGNYITÁSA (hunk + betöltés + --agent-notes).
+ * THE USER'S EXPLICIT REQUEST (4th live test): `r` is a state-dependent key —
+ *   idle    → start (confirmation panel, as before);
+ *   running → disabled (the "already running" hint stays), the footer gives
+ *             a dimmed signal;
+ *   done    → OPEN THE REVIEW (hunk + load + --agent-notes).
  *
- * A 'done' KÉT forrásból jöhet: a session AI-review state-jéből (done /
- * done-answer), VAGY a cache-elt, még be nem töltött válasz-findingokból (a
- * state már másik PR-t szolgálhat — a cache PR-ra kulcsolt). ÚJRA-REVIEW-T a
- * 'done' állapot NEM enged: az újraindítás előfeltétele az explicit elvetés
- * (dupla-`x` → cacheDiscardAiFindings + a state törlése).
+ * 'done' CAN COME FROM TWO SOURCES: the session's AI-review state (done /
+ * done-answer), OR the cached, not-yet-loaded response findings (the state
+ * may already be serving a DIFFERENT PR — the cache is keyed by PR).
+ * RE-REVIEWING is NOT allowed from the 'done' state: restarting requires the
+ * explicit discard precondition (double-`x` → cacheDiscardAiFindings + the
+ * state being cleared).
  *
- * A lezárt-de-eredménytelen végállapotok (no-findings / aborted / timeout /
- * killed-by-exit / failed) 'idle'-t adnak: ott az `r` legitim újraindítás.
+ * The closed-but-fruitless end states (no-findings / aborted / timeout /
+ * killed-by-exit / failed) give 'idle': there `r` is a legitimate restart.
  */
 export function aiReviewLifecycle({ review = null, pr, pending = null } = {}) {
   const own = review && typeof review === 'object' && review.pr === pr ? review : null
-  // (wf24/4) A MEGNYITÁS-FOLYAMAT SAJÁT ÉLETCIKLUS-ÁLLAPOT: az `opening` alatt
-  // az `r` nem indít újat és nem nyit confirmot — a lábléc `betöltés…`-t
-  // hirdet. A pending-ág ELŐTT áll, mert a betöltés alatt a pending még
-  // applied=false, ami 'done'-t (megnyitás-ajánlatot) adna vissza.
+  // (wf24/4) THE OPENING PROCESS GETS ITS OWN LIFECYCLE STATE: during
+  // `opening` `r` doesn't start a new one and doesn't open a confirm — the
+  // footer announces `loading…`. This branch comes BEFORE the pending
+  // branch, because during loading, pending is still applied=false, which
+  // would give 'done' (an open offer) instead.
   if (own && own.status === 'opening') return 'opening'
   if (own && (own.status === 'starting' || own.status === 'running')) return 'running'
   if (pending && pending.applied !== true && Array.isArray(pending.findings) && pending.findings.length > 0) {
@@ -341,171 +373,189 @@ export function aiReviewLifecycle({ review = null, pr, pending = null } = {}) {
 }
 
 /**
- * Az `r` kulcs ÁLLAPOTFÜGGŐ lábléc-címkéje (a globális KEYS és a panelFooter
- * közös forrása — két külön szöveg ugyanarra a kulcsra elcsúszna).
+ * The `r` key's STATE-DEPENDENT footer label (the shared source for the
+ * global KEYS and panelFooter — two separate texts for the same key would
+ * drift apart).
  */
 export function rKeyLabel({ lifecycle = 'idle', xArmed = false } = {}) {
-  // (wf24/4) A MEGNYITÁS-FOLYAMAT A LÁBLÉCBEN IS LÁTSZIK: a leütés első
-  // képkockáján a címke `betöltés…`-re vált, még a blokkoló spawnSync-ek előtt
-  // — enélkül a user egy néma, "halott" panelt lát pár másodpercig.
-  if (lifecycle === 'opening') return 'r: betöltés…'
-  // (wf31/5) FUTÓ REVIEW ALATT AZ `r` SZEGMENS ELTŰNIK — a címke ÜRES.
+  // (wf24/4) THE OPENING PROCESS IS ALSO VISIBLE IN THE FOOTER: on the very
+  // first frame after the keypress, the label switches to `loading…`, even
+  // before the blocking spawnSyncs — without this the user sees a silent,
+  // "dead" panel for a couple of seconds.
+  if (lifecycle === 'opening') return 'r: loading…'
+  // (wf31/5) THE `r` SEGMENT DISAPPEARS WHILE A REVIEW IS RUNNING — the
+  // label is EMPTY.
   //
-  // A USER LELETE, szó szerint: "review indítása után nem kell »r: review (már
-  // fut)« legend, egyszerűen ne legyen ott a legend."
+  // THE USER'S FINDING, verbatim: "after starting a review, no need for an
+  // 'r: review (already running)' legend, just don't show it there."
   //
-  // A HIBAOSZTÁLY: egy hirdetett kulcs, ami CSAK azt mondja meg, hogy NEM
-  // MŰKÖDIK, DEAD KEY — ugyanaz, amit a `modalHasChoices` zár ki a nyilas
-  // választásnál ("egy hirdetett, de nem működő nyíl dead key"). A szűk
-  // láblécben ráadásul HELYET is visz el a MŰKÖDŐ kulcsoktól: a `panelFooter`
-  // 100 oszloposnál a `clampCells` határán áll, tehát a "már fut" felirat
-  // ÁRÁN egy valódi akció szegmense esett le.
+  // THE ERROR CLASS: an advertised key that ONLY says it DOESN'T WORK is a
+  // DEAD KEY — the same thing `modalHasChoices` rules out for arrow-key
+  // choices ("an advertised but non-functional arrow is a dead key"). In
+  // the cramped footer it also TAKES UP SPACE from keys that DO work: the
+  // `panelFooter` sits right at `clampCells`'s limit past 100 columns, so
+  // the "already running" label cost a real action segment its spot.
   //
-  // A MEGSZAKÍTÁS NEM VESZETT EL: az `x`-et a PANEL PROGRESSZ-SORA hirdeti
-  // (`aiReviewPanelLines` `running` ága) — ott, AHOL A VÁRAKOZÁS ZAJLIK. Ez a
-  // modul kimondott elve ("az `x` a panel progressz-sorának VÉGÉN hirdetve van,
-  // tehát a user pontosan ott látja"), és erősebb jelzés is: a lábléc egy
-  // statikus sáv, a progressz-sor a figyelem középpontja. Ezért az `xArmed`
-  // ágon SEM tér vissza a szegmens.
+  // THE ABORT ISN'T LOST: the `x` is advertised by the PANEL'S PROGRESS
+  // LINE (the `running` branch of `aiReviewPanelLines`) — right there,
+  // WHERE THE WAITING HAPPENS. This is the module's stated principle ("the
+  // `x` is advertised at the END of the panel's progress line, so the user
+  // sees it right there"), and it's a stronger signal too: the footer is a
+  // static bar, the progress line is the focus of attention. So the segment
+  // doesn't come back on the `xArmed` branch either.
   //
-  // AZ ÜRES STRING (és nem egy hiányzó visszatérés): a `rKeyLabel` a
-  // lábléc-építők KÖZÖS forrása, a hívók pedig szegmens-listába illesztik. Az
-  // üres címkét a BEILLESZTŐ szűri ki (`panelFooter`, `legendWithRLabel`) — így
-  // a "mi látszik" szerződés EGY helyen dől el, és a lógó szeparátor (`· ·`)
-  // gépileg kizárt.
+  // THE EMPTY STRING (and not a missing return): `rKeyLabel` is the shared
+  // source for the footer builders, and the callers splice it into a
+  // segment list. The empty label is filtered out by the SPLICER
+  // (`panelFooter`, `legendWithRLabel`) — so the "what's visible" contract
+  // is decided in ONE place, and a dangling separator (`· ·`) is mechanically
+  // ruled out.
   if (lifecycle === 'running') return ''
   if (lifecycle === 'done') {
-    // (wf31/6) A KÉSZ ÁLLAPOT `r`-je MÁR NEM MEGNYITÓ — az ELVETÉST hirdeti.
+    // (wf31/6) THE DONE STATE'S `r` NO LONGER OPENS — it advertises the
+    // DISCARD.
     //
-    // A USER LELETE: "érkezett review esetén ne az 'r' nyissa meg a review-t,
-    // hanem a 'd'. hunk-ban úgyis el lehet rejteni a notes-okat, tehát sokkal
-    // értelmesebb."
+    // THE USER'S FINDING: "when a review has arrived, 'r' shouldn't open the
+    // review, 'd' should. In hunk the notes can be hidden anyway, so that
+    // makes much more sense."
     //
-    // MIÉRT AZ ELVETÉST HIRDETI, ÉS MIÉRT NEM HALLGAT EL TELJESEN (mint a
-    // `running` ág): a `running` alatt az `x` a PANEL PROGRESSZ-SORÁN hirdetve
-    // van, tehát a lábléc elhallgatása nem veszít információt. A `done`
-    // állapotban viszont NINCS progressz-sor (a mérés lefutott), tehát az
-    // elvetés kulcsának NINCS MÁSIK HIRDETŐJE — egy elhallgatott `x` itt azt
-    // jelentené, hogy a user nem tudja, hogyan szabadulhat meg egy nem kívánt
-    // review-tól.
+    // WHY IT ADVERTISES THE DISCARD, AND WHY IT DOESN'T STAY SILENT
+    // ENTIRELY (like the `running` branch): under `running`, the `x` is
+    // advertised on the PANEL'S PROGRESS LINE, so silencing the footer loses
+    // no information there. In the `done` state, though, there IS NO
+    // progress line (the measurement has finished), so the discard key has
+    // NO OTHER ADVERTISER — a silenced `x` here would mean the user has no
+    // way to know how to get rid of an unwanted review.
     //
-    // (wf31/12) EZ A SZEGMENS AZ ELVETÉS EGYETLEN HIRDETŐJE — és ez a
-    // status-sor kivezetése óta LOAD-BEARING. A korábbi alak mellett létezett egy
-    // második hirdető is: az `r` leütésére adott status-sor felsorolta a `d`-t és a
-    // dupla-`x`-et. Azt a sort a user kivezette ("teljesen felesleges, nem kell
-    // szájbarágni"), tehát ha ez a címke is elhallgatna, az elvetés kulcsa
-    // SEHOL nem jelenne meg.
+    // (wf31/12) THIS SEGMENT IS THE DISCARD'S ONLY ADVERTISER — and it's
+    // been LOAD-BEARING since the status line was retired. The earlier
+    // shape had a second advertiser too: the status line shown on pressing
+    // `r` used to list `d` and the double-`x`. The user retired that line
+    // ("completely unnecessary, no need to spell it out"), so if this label
+    // also fell silent, the discard key would appear NOWHERE.
     //
-    // MIÉRT NEM INDÍTHAT ÚJAT: a kifizetett, be nem töltött findingokat egy néma
-    // újraindítás FELÜLÍRNÁ — a memória-cache-ben ÉS a lemezen is (a review-store
-    // ugyanarra a PR-kulcsra ír). Ezért az új indítás előfeltétele VÁLTOZATLANUL
-    // az explicit elvetés (dupla-`x`).
+    // WHY IT CAN'T START A NEW ONE: an unwanted, not-yet-loaded finding set
+    // would be OVERWRITTEN by a silent restart — both in the in-memory cache
+    // AND on disk (review-store writes to the same PR key). So the
+    // precondition for a new start REMAINS the explicit discard (double-`x`).
     //
-    // (wf31/8) A KORÁBBI INDOKLÁS ITT "a cache csak a memóriában él"-t állított —
-    // az a disk-cache (review-store) bevezetése ELŐTTI állapot volt, és a user
-    // szúrta ki a belőle származó hazug kilépés-figyelmeztetésen. A VÉDENDŐ
-    // INVARIÁNS VÁLTOZATLAN (a friction az újraindítás előtt), csak az OKA
-    // pontos: nem elvesznek, hanem FELÜLÍRÓDNAK.
+    // (wf31/8) THE EARLIER RATIONALE here claimed "the cache only lives in
+    // memory" — that was the state BEFORE the disk cache (review-store) was
+    // introduced, and the user caught it from the lying exit warning it
+    // produced. THE PROTECTED INVARIANT IS UNCHANGED (the friction before a
+    // restart), only the REASON is now precise: they don't get lost, they
+    // get OVERWRITTEN.
     //
-    // (wf31/12) A CÍMKE A VALÓDI KULCSOT NEVEZI MEG: `x: review elvetése`, nem
-    // `r: elvetés (x)`. A user kérése, és egy MÉRHETŐ félrevezetés javítása: az
-    // elvetést az `x` végzi (dupla nyomásra), az `r` ezen az állapoton HANGOS
-    // NO-OP. A régi alak tehát az `r`-t hirdette a szegmens ELEJÉN — a szem
-    // odaugrik —, és az igazi kulcsot zárójelbe tette a végén. Az idióma is
-    // egységes lett: minden más szegmens `<kulcs>: <művelet>` alakú
-    // (`d: diff`, `a: approve`), ez volt az egyetlen `<rossz kulcs>: <művelet>
-    // (<jó kulcs>)` kivétel.
+    // (wf31/12) THE LABEL NAMES THE REAL KEY: `x: discard review`, not
+    // `r: discard (x)`. The user's request, and a MEASURABLE
+    // misdirection fixed: the discard is done by `x` (on a double press),
+    // the `r` on this state is a LOUD NO-OP. The old shape advertised `r`
+    // at the START of the segment — the eye jumps there — and put the real
+    // key in parentheses at the end. The idiom is now consistent too: every
+    // other segment is `<key>: <action>` (`d: diff`, `a: approve`), this
+    // was the only `<wrong key>: <action> (<right key>)` exception.
     //
-    // A SZÓREND `review elvetése`, nem `elvetés`: a szomszédos szegmensek is a
-    // TÁRGYAT nevezik meg (`f: review feltöltése`), és a puszta „elvetés" nem
-    // mondja meg, MIT vetünk el — a panelben egyszerre több elvethető dolog is
-    // szóba jöhet (findingok, a mérés).
-    return xArmed ? 'x: review elvetése — még egy x' : 'x: review elvetése'
+    // THE WORD ORDER IS "discard review", not "discard": the neighboring
+    // segments also name the OBJECT (`f: upload review`), and a bare
+    // "discard" doesn't say WHAT is being discarded — several things could
+    // be discardable in the panel at once (findings, the measurement).
+    return xArmed ? 'x: discard review — one more x' : 'x: discard review'
   }
-  // (1c) A NYUGALMI CÍMKE RÖVID: a user kérése. A lábléc a legszűkebb,
-  // degradálódó felület — ott az "AI-" előtag nem különböztet meg semmit (a `d`
-  // a diff-review, az `r` a másik), viszont a többi kulcs helyét veszi el. A
-  // provenance-szövegek (panel-szekciók, attesztáció, hibák) MEGTARTJÁK az
-  // "AI-review"-t: ott tényleg informatív, hogy mi költött tokent.
+  // (1c) THE IDLE LABEL IS SHORT: the user's request. The footer is the
+  // most cramped, degrading surface — there the "AI-" prefix doesn't
+  // distinguish anything (`d` is the diff review, `r` is the other one),
+  // but it does take up space from other keys. The provenance texts (panel
+  // sections, attestation, errors) KEEP "AI review" — there it really is
+  // informative to say what spent tokens.
   return 'r: review'
 }
 
 
-// --- A PANEL AI-REVIEW SZEKCIÓJA (3) ----------------------------------------
+// --- THE PANEL'S AI-REVIEW SECTION (3) --------------------------------------
 
-/** Ennyi findingot mutat a panel rövid listája; a többi darabszámmal kimondva. */
+/** This many findings the panel's short list shows; the rest are stated as a count. */
 export const AI_PANEL_FINDINGS_SHOWN = 5
 
 /**
- * A SUMMARY SOR-PLAFONJA — FAIL-SOFT BIZTOSÍTÉK, NEM TERVEZETT KORLÁT.
+ * THE SUMMARY LINE CEILING — A FAIL-SOFT SAFEGUARD, NOT A PLANNED LIMIT.
  *
- * (wf31/50) A user kérdése: "a review summary-je most cappelve van 4 sorba […]
- * Érdemes cappelve tartani? Ez úgyis egy summary, megjelenhetne mind, nem?" —
- * és a válasz igen, mert az ELŐZŐ ÉRTÉK (4) A ROSSZ DOLGOT VÉDTE.
+ * (wf31/50) The user's question: "the review summary is currently capped at
+ * 4 lines […] Is it worth keeping it capped? It's a summary anyway, it
+ * could just show in full, no?" — and the answer is yes, because the
+ * PREVIOUS VALUE (4) WAS PROTECTING THE WRONG THING.
  *
- * A RÉGI INDOKLÁS az volt, hogy "a hosszú összegző nem tolhatja ki a
- * finding-listát". Ez PRIORITÁS-döntés volt, nem hely-kérdés: a fizikai korlátot
- * a `clipBodyLines` kezeli (a panel törzsét a terminál magasságához vágja, ÉS ki
- * is mondja: "… a panel csonkolva"). A 4-es cap tehát arról döntött, hogy szűk
- * helyen a summary vagy a findingok nyerjenek — és FORDÍTVA döntött, mint kell:
+ * THE OLD RATIONALE was that "the long summary shouldn't push out the
+ * findings list". That was a PRIORITY decision, not a space question: the
+ * physical limit is handled by `clipBodyLines` (it clips the panel body to
+ * the terminal height, AND states it too: "… panel truncated"). The 4-line
+ * cap, then, decided who wins on tight space — the summary or the findings —
+ * and decided it BACKWARDS:
  *
- *   · a FINDINGOK máshol is elérhetők: a `d` megnyitja őket a hunkban, a kód
- *     mellett, TELJES egészében — a panel 5 elemű listája (`AI_PANEL_FINDINGS_SHOWN`)
- *     amúgy is csak ízelítő, a "… és N további" ki is mondja;
- *   · a SUMMARY viszont SEHOL MÁSHOL nincs meg. Ez a verdict — pontosan az, amit
- *     a user korábban hiányolt ("a findingok listája NEM verdict", wf24/2). Ha itt
- *     csonkolódik, elveszett.
+ *   · the FINDINGS are available elsewhere too: `d` opens them in the hunk,
+ *     next to the code, IN FULL — the panel's 5-item list
+ *     (`AI_PANEL_FINDINGS_SHOWN`) is just a preview anyway, and the "… and N
+ *     more" says so;
+ *   · the SUMMARY, though, exists NOWHERE ELSE. This is the verdict —
+ *     exactly what the user missed earlier ("the findings list is NOT a
+ *     verdict", wf24/2). If it gets truncated here, it's gone.
  *
- * A rövidítés helye tehát a finding-lista, nem az összegző.
+ * The place to shorten, then, is the findings list, not the summary.
  *
- * MIÉRT MARAD MÉGIS PLAFON, ÉS MIÉRT ÉPP 12: nem a tervezett esetre, hanem az
- * ELSZALADT MODELL-VÁLASZRA. A prompt 2-4 mondatot kér, ami cellára tördelve 3-6
- * sor — egy 12-es plafon a NORMÁL esetet sosem érinti, egy 40 soros hallucinált
- * összegzőt viszont nem hagy a panelre ömleni. Ez védőháló, nem UI-döntés.
+ * WHY A CEILING REMAINS ANYWAY, AND WHY EXACTLY 12: not for the planned
+ * case, but for a RUNAWAY MODEL RESPONSE. The prompt asks for 2-4
+ * sentences, which wraps to 3-6 lines in cells — a 12-line ceiling never
+ * touches the NORMAL case, but it does stop a 40-line hallucinated summary
+ * from flooding the panel. This is a safety net, not a UI decision.
  *
- * A CSONKOLÁST A `…` TOVÁBBRA IS KIMONDJA — a néma levágás azt hitetné, hogy a
- * verdict ott véget ért.
+ * THE TRUNCATION IS STILL STATED via the `…` — a silent cut would give the
+ * impression that the verdict ended there.
  */
 export const AI_PANEL_SUMMARY_LINES = 12
 
 /**
- * A PR-panel AI-review szekciójának SOR-LEÍRÓI — az app render-fája ebből épül.
+ * THE ROW DESCRIPTORS for the PR panel's AI-review section — the app's
+ * render tree is built from these.
  *
- * MIÉRT A PANELBEN (a user szó szerint): "a statusüzenet a képernyő lenti
- * részén nem jó hely, mutálja a layoutot". A megerősítés, a progressz, a
- * végállapot, a finding-lista és a betöltés-ajánlat MIND a PR-panelben él; az
- * alsó globális status-sor AI-review vonatkozású használata megszűnt.
+ * WHY IN THE PANEL (the user, verbatim): "the status message at the bottom
+ * of the screen isn't a good spot, it mutates the layout". The
+ * confirmation, the progress, the end state, the findings list, and the
+ * load offer ALL live in the PR panel; the bottom global status line's use
+ * for AI-review purposes has ended.
  *
- * TISZTA függvény: a `now` injektált, tehát a futó ág eltelt-idő-számítása
- * determinisztikusan tesztelhető. Minden sor display-CELLÁBAN clampelt.
+ * A PURE function: `now` is injected, so the running branch's elapsed-time
+ * computation is deterministically testable. Every line is clamped in
+ * display CELLS.
  */
 export function aiReviewPanelLines(review, { innerWidth = 80, now = Date.now() } = {}) {
   if (!review || typeof review !== 'object') return []
   const W = Math.max(1, Math.floor(Number(innerWidth) || 1))
-  // A DEGRADÁLT review caveat-je minden végállapot-sor ELÉ kerül: a findingok
-  // látszanak, de a "nem teljes" tényt nem szabad elhallgatni (attesztáció!).
+  // THE DEGRADED review's caveat comes BEFORE every end-state line: the
+  // findings are visible, but the "not complete" fact must not be
+  // suppressed (attestation!).
   const caveatLine = review.caveat
     ? [{ key: 'ai-caveat', color: 'yellow', text: clampCells(`⚠ ${review.caveat}`, W) }]
     : []
   switch (review.status) {
     case 'starting':
-      // AZ AZONNALI VISSZAJELZÉS (6): még a session-check és a git-fetch előtt.
-      return [{ key: 'ai-0', color: 'cyan', text: clampCells('⏳ AI-review indul…', W) }]
+      // THE IMMEDIATE FEEDBACK (6): even before the session check and the
+      // git fetch.
+      return [{ key: 'ai-0', color: 'cyan', text: clampCells('⏳ AI review starting…', W) }]
     case 'opening':
-      // (wf24/4) UGYANAZ A HIBAOSZTÁLY, MINT A 'starting'-nál: a kész review
-      // `r`-je is blokkoló spawnSync-ekkel (repo-gyökér, session-azonosító,
-      // PR-refek) indul, tehát a leütés után a UI némán állt — a user "még
-      // mindig nem reszponzív" lelete. A jelzés a leütés ELSŐ képkockáján megy
-      // ki, a blokkoló hívások ELŐTT.
-      return [{ key: 'ai-0', color: 'cyan', text: clampCells('⏳ betöltés…', W) }]
+      // (wf24/4) THE SAME ERROR CLASS AS 'starting': the finished review's
+      // `r` also starts with blocking spawnSyncs (repo root, session id, PR
+      // refs), so after the keypress the UI silently froze — the user's
+      // "still not responsive" finding. The signal goes out on the very
+      // first frame after the keypress, before the blocking calls.
+      return [{ key: 'ai-0', color: 'cyan', text: clampCells('⏳ loading…', W) }]
     case 'running': {
       const label = aiReviewProgressLabel({
         pr: review.pr,
         elapsedMs: Math.max(0, now - (review.startedAt ?? now)),
         findings: review.findings ?? 0,
         tool: review.tool ?? null,
-        // A DUPLA-X élesítése: az első `x` után a címke "megszakítás
-        // megerősítése" — a jelzés OTT vált, ahol az `x`-et hirdetjük.
+        // ARMING THE DOUBLE-X: after the first `x` the label switches to
+        // "confirm abort" — the signal changes RIGHT WHERE we advertise
+        // the `x`.
         xArmed: review.xArmed === true,
       })
       return [{ key: 'ai-0', color: 'cyan', text: clampCells(`⏳ ${label}`, W) }]
@@ -513,37 +563,41 @@ export function aiReviewPanelLines(review, { innerWidth = 80, now = Date.now() }
     case 'done':
     case 'done-answer': {
       const out = []
-      // A FEJLÉC FELÜLÍRHATÓ (`headNote`): a degradált utakon a hívó ŐSZINTE
-      // fejlécet ad — élő session melletti ref-fetch-hibán (hazug-felirat-1)
-      // vagy elhasalt hunk-írás-mérésen (dupla-betoltes-1) a default
-      // "a hunk-session nem élt a futás alatt" HAMIS állítás lenne.
+      // THE HEADER IS OVERRIDABLE (`headNote`): on the degraded paths the
+      // caller gives an HONEST header — with a ref-fetch error alongside a
+      // live session (lying-label-1) or a failed hunk-write measurement
+      // (double-load-1), the default "the hunk session wasn't alive during
+      // the run" would be a FALSE claim.
       //
-      // (wf24/1) A DEFAULT FEJLÉC TÖMÖR. A user szó szerint: a
-      // "… ELTÁROLVA — a hunk-session nem élt a futás alatt" VERBOSE ÉS
-      // ÉRDEKTELEN — implementációs részlet, ami nem a usernek szól. Ami a
-      // usernek szól: hány finding van, és mi a következő lépésük (a `done`
-      // ágon MÁR a hunkban, a `done-answer` ágon betöltésre VÁRVA). A
-      // degradált utak `headNote`-ja továbbra is FELÜLÍR — ott az ok
-      // kimondása attesztáció, nem részlet.
+      // (wf24/1) THE DEFAULT HEADER IS TERSE. The user, verbatim: the "…
+      // STORED — the hunk session wasn't alive during the run" was VERBOSE
+      // AND UNINTERESTING — an implementation detail that isn't for the
+      // user. What IS for the user: how many findings there are, and what
+      // their next step is (on the `done` branch ALREADY in the hunk, on
+      // the `done-answer` branch WAITING to be loaded). The degraded
+      // paths' `headNote` still OVERRIDES — there, stating the reason is
+      // attestation, not detail.
       const head = typeof review.headNote === 'string' && review.headNote !== ''
         ? review.headNote
         : review.status === 'done'
-        ? `✓ ${review.added} finding a hunkban`
-        : `✓ ${review.added} finding (betöltésre vár)`
+        ? `✓ ${review.added} findings in the hunk`
+        : `✓ ${review.added} findings (waiting to be loaded)`
       out.push({ key: 'ai-0', color: 'green', text: clampCells(head, W) })
       out.push(...caveatLine)
-      // (wf24/2) AZ ÖSSZEGZŐ A FINDINGOK FÖLÖTT. Ez az, amit a user hiányolt:
-      // a findingok listája NEM verdict. Cellára tördelve, és (wf31/50 óta) CSAK
-      // egy fail-soft plafonnal — a rövidítés helye a finding-lista, nem az
-      // összegző; az indoklás az `AI_PANEL_SUMMARY_LINES` fejénél áll.
+      // (wf24/2) THE SUMMARY GOES ABOVE THE FINDINGS. This is what the user
+      // was missing: the findings list is NOT a verdict. Wrapped to cells,
+      // and (since wf31/50) with ONLY a fail-soft ceiling — the place to
+      // shorten is the findings list, not the summary; the rationale is at
+      // the head of `AI_PANEL_SUMMARY_LINES`.
       const summaryText = typeof review.summary === 'string' ? review.summary.trim() : ''
       if (summaryText !== '') {
         const wrapped = wrapCells(summaryText, W)
         const shownSum = wrapped.slice(0, AI_PANEL_SUMMARY_LINES)
         if (wrapped.length > shownSum.length) {
-          // A CSONKOLÁS KIMONDVA: a néma levágás azt hitetné, hogy a verdict
-          // ott véget ért. A `…` a MÁR CLAMPELT sor végére kerül, ezért az
-          // utolsó sort újraclampeljük a jelölővel együtt.
+          // THE TRUNCATION IS STATED: a silent cut would give the
+          // impression that the verdict ended there. The `…` goes onto the
+          // end of the ALREADY-CLAMPED line, so the last line is re-clamped
+          // together with the marker.
           const last = shownSum[shownSum.length - 1]
           shownSum[shownSum.length - 1] = clampCells(`${last} …`, W)
         }
@@ -558,16 +612,18 @@ export function aiReviewPanelLines(review, { innerWidth = 80, now = Date.now() }
         out.push({ key: `ai-f${i}`, dimColor: true, text: clampCells(`  · ${f.filePath}${pos} — ${f.summary}`, W) })
       })
       if (findings.length > shown.length) {
-        out.push({ key: 'ai-more', dimColor: true, text: clampCells(`  … és ${findings.length - shown.length} további`, W) })
+        out.push({ key: 'ai-more', dimColor: true, text: clampCells(`  … and ${findings.length - shown.length} more`, W) })
       }
-      // (wf24/3) AZ AKCIÓ-AJÁNLAT SOR MEGSZŰNT. A user szó szerint: "operation
-      // labelek a statussorban vannak. Modalba elég a state, hogy a review
-      // kész." Az `r`/`x` kulcsokat a panel LÁBLÉCE hirdeti (rKeyLabel +
-      // panelFooter), tehát ez a sor tiszta duplikáció volt.
+      // (wf24/3) THE ACTION-OFFER LINE IS GONE. The user, verbatim:
+      // "operation labels are in the status line. In the modal, the state
+      // that the review is done is enough." The `r`/`x` keys are
+      // advertised by the panel's FOOTER (rKeyLabel + panelFooter), so this
+      // line was pure duplication.
       //
-      // A `review.offer` FLAG MEGMARAD és VÁLTOZATLANUL VEZÉREL: az Enter/`r`
-      // útja, az `x`-elvetés élesítése és a betöltés-teljesülés (`offer:false`)
-      // mind ebből dönt — csak a KIÍRÁS tűnt el, a VISELKEDÉS nem.
+      // The `review.offer` FLAG REMAINS and STILL CONTROLS BEHAVIOR
+      // UNCHANGED: the Enter/`r` path, arming the `x` discard, and the load
+      // being fulfilled (`offer:false`) all decide from it — only the
+      // PRINTING disappeared, not the BEHAVIOR.
       return out
     }
     case 'no-findings':
@@ -577,15 +633,16 @@ export function aiReviewPanelLines(review, { innerWidth = 80, now = Date.now() }
       return wrapCells(String(review.message ?? ''), W).slice(0, 6)
         .map((t, i) => ({ key: `ai-${i}`, dimColor: true, text: t }))
     case 'failed':
-      // A HIBA IS A PANELBEN él (nem a globális hiba-overlayen): az AI-review
-      // minden állapota EGY helyen olvasható. Pirosan, tördelve, korlátozott
-      // sor-számmal (a nyers stderr ne tolja ki a listát).
+      // THE ERROR ALSO LIVES IN THE PANEL (not the global error overlay):
+      // every AI-review state is readable in ONE place. In red, wrapped,
+      // with a limited line count (so the raw stderr doesn't push the list
+      // out).
       return wrapCells(String(review.message ?? ''), W).slice(0, 12)
         .map((t, i) => ({ key: `ai-${i}`, color: 'red', text: t }))
     default:
       throw new Error(
-        `ismeretlen AI-review panel-státusz: ${JSON.stringify(review.status)} — a néma default `
-        + 'pontosan a #904-es gyűjtőág-osztály lenne.',
+        `unknown AI-review panel status: ${JSON.stringify(review.status)} — a silent default `
+        + 'would be exactly the #904 catch-all-branch error class.',
       )
   }
 }
