@@ -47,8 +47,12 @@
       "optional": true
     }
   },
+  "devDependencies": {
+    "react-devtools-core": "^6.1.5"
+  },
   "scripts": {
     "test": "node --test 'test/**/*.test.mjs'",
+    "build:binary": "bun build --compile --outfile dist/tuipr bin/tuipr.mjs",
     "check": "node --check bin/tuipr.mjs && node --test 'test/**/*.test.mjs'"
   },
   "engines": {

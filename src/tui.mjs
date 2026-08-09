@@ -320,7 +320,18 @@ export async function main() {
   // The app module's path can be overridden from env — this is the test
   // handle for covering the "dependency not resolvable" branch (don't use it
   // for anything else).
-  const appModule = process.env.TUIPR_NEXT_TUI_APP || './tui-app.mjs'
+  //
+  // WHY THE OVERRIDE IS NOT THE DEFAULT PATH ANY MORE (measured): when the
+  // import specifier was ALWAYS a variable, a bundler could not see which
+  // module this file needs, so `tui-app.mjs` was left out of a single-file
+  // build entirely. The compiled binary started, then died on
+  // `Cannot find module './tui-app.mjs'` — the program worked and the
+  // packaging did not, which is the worst place for the seam to be.
+  //
+  // The literal below is therefore STATICALLY VISIBLE, and the variable path
+  // is taken only when the test handle is actually set. Both branches still
+  // exist; only the default is now something a bundler can follow.
+  const appModuleOverride = process.env.TUIPR_NEXT_TUI_APP
 
   // Ink resolution follows the pattern of pkl.sh (scripts/pkl.sh): the
   // consumer's tree isn't guaranteed to have ink (pnpm hoisting, vendored
@@ -353,7 +364,7 @@ export async function main() {
 
   let runTui
   try {
-    ;({ runTui } = await import(appModule))
+    ;({ runTui } = appModuleOverride ? await import(appModuleOverride) : await import('./tui-app.mjs'))
   } catch (error) {
     // We only handle the "module/package not found" error gracefully —
     // anything else (a syntax error, a runtime throw in the module body) is

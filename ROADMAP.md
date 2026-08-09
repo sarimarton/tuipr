@@ -84,9 +84,21 @@ Where such a pattern still exists, it now says so at the point of use.
       one binary (`brew install hunk`) is the better trade, and the code
       already resolved it from `PATH`. This reverses an earlier plan — the
       measurement decided it.
+- [x] **A single-file binary works.** `npm run build:binary` produces a 61 MB
+      executable that runs from anywhere with no Node and no `node_modules` —
+      verified against a real repository in a real terminal.
+
+      Getting there needed one change in our own code, and it is the more
+      interesting half of the finding. The app module was imported through a
+      variable, so a bundler could not see which module the entry needs and
+      left it out entirely: the binary started and then died on
+      `Cannot find module './tui-app.mjs'`. The program worked; the packaging
+      did not. The default specifier is now a static literal, with the
+      variable path kept for the test handle that needs it.
+
+- [ ] Per-platform release artifacts + a Homebrew tap whose formula declares
+      `hunk` as a dependency, so the binary path also installs in one command.
 - [ ] Onboarding docs: authentication, requirements, first run.
-- [ ] Single-file binaries + a Homebrew tap. The M1 spike came back green for
-      this, with the caveat noted above.
 
 ## M4 — Portfolio grade
 
