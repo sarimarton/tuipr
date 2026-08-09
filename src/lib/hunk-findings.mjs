@@ -1,70 +1,76 @@
-// tuipr — HUNK-FINDINGS: a HIBRID findings-könyvelés (a session-halál ellen).
+// tuipr — HUNK-FINDINGS: HYBRID findings bookkeeping (against session death).
 //
-// A MEGFIZETETT HIBA, amiért ez a réteg létezik: a review lefutott (a
-// token-költés MEGTÖRTÉNT), de a hunk-session a futás KÖZBEN megszűnt — a user
-// épp azért lépett ki a hunkból, hogy a TUI-ban lássa a progresszt! —, és MINDEN
-// finding elveszett. A "futtasd újra" pedig ÚJRAKÖLTÉS lett volna.
+// THE PAID-FOR BUG this layer exists to fix: the review ran to completion (the
+// token spend HAPPENED), but the hunk session died WHILE it was running — the
+// user had exited the hunk precisely so they could watch the progress in the
+// TUI! — and EVERY finding was lost. "Run it again" would have been a RE-SPEND.
 //
-// Ezért a findingok KÉT könyvelést kapnak: a hunk-session (ha él) ÉS az agent
-// végső válaszának strukturált JSON-blokkja. Ez a modul az utóbbi olvasása és
-// későbbi betöltése.
+// So findings get TWO bookkeepings: the hunk session (if it's alive) AND the
+// agent's final answer's structured JSON block. This module reads the latter
+// and loads it in later.
 //
-// RÉTEGREND: lefelé importál (hunk: a session-hibaosztály és a hint; proc: a
-// spawn-diagnózis). A hunk.mjs SEMMIT nem kér vissza innen — az irány
-// egyirányú, a scripts/check-next-modules.mjs őrzi.
+// LAYER ORDER: imports downward (hunk: the session error class and the hint;
+// proc: spawn diagnosis). hunk.mjs asks NOTHING back from here — the
+// direction is one-way, guarded by scripts/check-next-modules.mjs.
 import { HUNK_SESSION_HINT, hunkBin, isNoActiveSession } from './hunk.mjs'
 import { spawnFailure } from './proc.mjs'
 import { spawnSync } from 'node:child_process'
 
-// === HIBRID FINDINGS: dupla könyvelés a session-halál ellen ==================
+// === HYBRID FINDINGS: double bookkeeping against session death ==============
 //
-// A MEGFIZETETT HIBA: a review lefutott (a token-költés megtörtént), de a
-// hunk-session a futás KÖZBEN megszűnt (a user épp azért lépett ki a hunkból,
-// hogy a TUI-ban lássa a progresszt!), és MINDEN finding elveszett — a
-// "futtasd újra" pedig újraköltés lett volna.
+// THE PAID-FOR BUG: the review ran to completion (the token spend happened),
+// but the hunk session died WHILE it was running (the user had exited the
+// hunk precisely so they could watch the progress in the TUI!), and EVERY
+// finding was lost — "run it again" would have been a re-spend.
 //
-// A HIBRID ARCHITEKTÚRA három lába:
-//   (a) az agent a VÉGSŐ válaszában IS visszaadja a findingokat strukturáltan
-//       (fenced ```json blokk, {"findings":[…]}) — ez a DUPLA KÖNYVELÉS;
-//   (b) ha az agent a hunkba IS írt (élt a session), minden marad a régiben;
-//   (c) ha a session megszűnt/nem volt, a findingok a válasz-JSON-ból jönnek:
-//       a cache PR-ra kulcsolva eltárolja őket, és a hunk MEGNYITÁSAKOR a
-//       `hunk session comment apply --stdin` batch-útján töltődnek be. A
-//       betöltés IDEMPOTENS: az `applied` flag jegyzi, hogy megtörtént.
+// THE HYBRID ARCHITECTURE has three legs:
+//   (a) the agent ALSO returns the findings structurally in its FINAL answer
+//       (a fenced ```json block, {"findings":[…]}) — this is the DOUBLE
+//       BOOKKEEPING;
+//   (b) if the agent ALSO wrote into the hunk (the session was alive),
+//       everything remains as it was;
+//   (c) if the session died/never existed, the findings come from the answer
+//       JSON: keyed on the PR, the cache stores them, and when the hunk is
+//       OPENED they get loaded via the `hunk session comment apply --stdin`
+//       batch path. The load is IDEMPOTENT: the `applied` flag records that
+//       it happened.
 //
-// MIÉRT A VÁLASZ-SZÖVEG FENCED JSON-JA, ÉS NEM `--json-schema`: a
-// `--json-schema` a TELJES kimenetet kényszerítené sémára, ami üt a hunk-írás
-// instrukcióval (az agentnek dolgoznia kell, nem csak válaszolnia), és a
-// stream-json `result` mezője amúgy is a végső szöveg — abban a fenced blokk
-// megbízhatóan parse-olható. A v1 (nem-agent) út `--json-schema`-ja marad,
-// mert ott a válasz maga a termék.
+// WHY THE FENCED JSON IN THE ANSWER TEXT, AND NOT `--json-schema`: forcing
+// the ENTIRE output onto a schema with `--json-schema` would clash with the
+// hunk-writing instruction (the agent needs to do work, not just answer), and
+// the stream-json `result` field is the final text anyway — the fenced block
+// can be parsed reliably out of that. The v1 (non-agent) path's
+// `--json-schema` stays, because there the answer itself is the product.
 
 /**
- * A VÁLASZ-FINDINGOK ÉS AZ ÖSSZEGZŐ kinyerése az agent végső szövegéből.
+ * Extracting the ANSWER FINDINGS AND THE SUMMARY from the agent's final text.
  *
- * HÁROM KIMENET, három JELENTÉSSEL:
- *   - `{ summary, findings }` — az agent adott strukturált blokkot; a `findings`
- *     üres tömbje a "nem találtam" GÉPI alakja (legitim), a `summary` `null`, ha
- *     az agent nem adott (vagy nem string/üres) összegzőt;
- *   - `null` — NINCS blokk: az agent nem tett strukturált állítást. Ez NEM
- *     üres lista — a hívó nem olvashatja "nincs finding"-ként;
- *   - DOBÁS — van blokk, de a séma sérült (pozíció/filePath/summary hiányzik).
- *     A néma átengedés a batch-apply-t buktatná meg (fail-closed), vagy rossz
- *     helyre tett kommentet adna.
+ * THREE OUTCOMES, three MEANINGS:
+ *   - `{ summary, findings }` — the agent gave a structured block; an empty
+ *     `findings` array is the MACHINE form of "found nothing" (legitimate),
+ *     `summary` is `null` if the agent gave no (or a non-string/empty)
+ *     summary;
+ *   - `null` — NO block: the agent made no structured statement. This is NOT
+ *     an empty list — the caller must not read it as "no findings";
+ *   - THROW — there is a block, but the schema is broken (position/filePath/
+ *     summary missing). Silently passing it through would break the
+ *     batch-apply (fail-closed), or place a comment in the wrong spot.
  *
- * MIÉRT OBJEKTUM A VISSZATÉRÉS (wf24/2, a user "nem találok összegzést sehol"
- * lelete): a panel az EMBER-OLVASHATÓ összegzőt hiányolta, ami eddig SEHOL nem
- * létezett (a prompt sem kérte). A summary-t egy tömbre akasztott
- * nem-enumerálható mezőként is vissza lehetett volna adni, de az REJTETT
- * szerződés lenne — a JSON.stringify, a spread és a deepEqual mind elhullatná.
- * Ezért `{ summary, findings }`, MINDEN hívó átvíve.
+ * WHY AN OBJECT AS THE RETURN VALUE (wf24/2, the user's "I can't find a
+ * summary anywhere" finding): the panel was missing a HUMAN-READABLE summary,
+ * which up to then existed NOWHERE (the prompt didn't ask for one either). The
+ * summary could have been hung on the array as a non-enumerable field
+ * instead, but that would be a HIDDEN contract — JSON.stringify, spread, and
+ * deepEqual would all drop it silently. Hence `{ summary, findings }`, passed
+ * through by EVERY caller.
  *
- * VISSZAFELÉ KOMPATIBILIS a MODELL felé (nem a hívók felé): summary NÉLKÜLI
- * (régi) alak, sőt CSUPASZ findings-TÖMB is elfogadott — a kifizetett review
- * findingjait egy séma-legyengülés nem veszejtheti el.
+ * BACKWARD COMPATIBLE toward the MODEL (not toward the callers): the
+ * summary-LESS (old) shape, and even a BARE findings ARRAY, are both accepted
+ * — a schema downgrade must not lose the findings of a review that's already
+ * been paid for.
  *
- * TÖBB blokknál az UTOLSÓ findings-blokk nyer: az agent munka közben is
- * írhat ki JSON-t, a végső összegzés a mérvadó.
+ * FOR MULTIPLE blocks, the LAST findings block wins: the agent can print JSON
+ * mid-work too, the final summary is authoritative.
  */
 export function parseAnswerFindings(text) {
   const src = typeof text === 'string' ? text : ''
@@ -73,8 +79,8 @@ export function parseAnswerFindings(text) {
   const fence = /```(?:json)?[ \t]*\n([\s\S]*?)```/gi
   let m
   while ((m = fence.exec(src)) !== null) candidates.push(m[1])
-  // A TELJES válasz mint nyers JSON a LEGERŐSEBB jelölt (answer-only agent):
-  // a lista végére kerül, mert hátulról iterálunk.
+  // The FULL answer as raw JSON is the STRONGEST candidate (answer-only agent):
+  // it goes at the end of the list, because we iterate from the back.
   candidates.push(src)
   let found
   let summary = null
@@ -92,9 +98,9 @@ export function parseAnswerFindings(text) {
         : null
       break
     }
-    // A CSUPASZ TÖMB (séma-legyengülés): az agent a burkoló objektumot
-    // elhagyta. Elfogadjuk — a findingok kifizetettek, egy formai csúszás nem
-    // dobhatja el őket. Összegző ilyenkor nincs.
+    // THE BARE ARRAY (schema downgrade): the agent dropped the wrapping
+    // object. We accept it — the findings are already paid for, a formal
+    // slip must not discard them. There's no summary in that case.
     if (Array.isArray(parsed)) {
       found = parsed
       summary = null
@@ -104,10 +110,10 @@ export function parseAnswerFindings(text) {
   if (found === undefined) return null
   const findings = found.map((f, i) => {
     if (typeof f?.filePath !== 'string' || f.filePath.trim() === '') {
-      throw new Error(`a ${i}. válasz-findingból hiányzik a filePath — a batch-apply elhasalna rajta`)
+      throw new Error(`answer finding ${i} is missing filePath — the batch-apply would fail on it`)
     }
     if (typeof f.summary !== 'string' || f.summary.trim() === '') {
-      throw new Error(`a ${i}. válasz-findingból (${f.filePath}) hiányzik a summary — üres kommentet nem töltünk be`)
+      throw new Error(`answer finding ${i} (${f.filePath}) is missing summary — we don't load an empty comment`)
     }
     const newLine = Number(f.newLine)
     const oldLine = Number(f.oldLine)
@@ -115,14 +121,14 @@ export function parseAnswerFindings(text) {
     const hasOld = f.oldLine !== undefined && f.oldLine !== null && Number.isInteger(oldLine) && oldLine > 0
     if (!hasNew && !hasOld) {
       throw new Error(
-        `a ${i}. válasz-findingnak (${f.filePath}) nincs pozíciója (newLine|oldLine) — `
-        + 'pozíció nélküli findingot a hunk batch-apply fail-closed módon elutasít',
+        `answer finding ${i} (${f.filePath}) has no position (newLine|oldLine) — `
+        + 'the hunk batch-apply rejects a finding with no position, fail-closed',
       )
     }
     const out = { filePath: f.filePath }
-    // Ha MINDKETTŐ meg van adva (agent-slip), a post-image (newLine) nyer: az a
-    // gyakoribb és a diff jobb oldala — a dobás itt egy teljes (kifizetett)
-    // review-t veszejtene el egy redundáns mező miatt.
+    // If BOTH are given (agent slip), the post-image (newLine) wins: it's the
+    // more common one and the diff's right-hand side — throwing here would
+    // discard an entire (already paid-for) review over a redundant field.
     if (hasNew) out.newLine = newLine
     else out.oldLine = oldLine
     out.summary = f.summary
@@ -133,13 +139,13 @@ export function parseAnswerFindings(text) {
 }
 
 /**
- * A batch-apply STDIN-payloadja — a MÉRT séma (hunk 0.17.0):
+ * The batch-apply STDIN payload — the MEASURED schema (hunk 0.17.0):
  *   printf '{"comments":[{"filePath":"f.txt","newLine":5,"summary":"…"}]}' \
  *     | hunk session comment apply --repo <path> --stdin
  *   → "Applied 2 live comments", noteId `mcp:<uuid>:<n>`.
  *
- * A `rationale` a summary-hoz fűzve megy be: a mért apply-séma csak summary-t
- * hordoz, és az indoklás elvesztése rosszabb, mint az összefűzés.
+ * `rationale` gets appended to summary: the measured apply schema only
+ * carries a summary, and losing the rationale is worse than concatenating it.
  */
 export function answerFindingsPayload(findings) {
   return JSON.stringify({
@@ -152,13 +158,14 @@ export function answerFindingsPayload(findings) {
 }
 
 /**
- * A cache-elt válasz-findingok BETÖLTÉSE a (már élő) hunk sessionbe.
+ * LOADING the cached answer findings into the (already-live) hunk session.
  *
- * FAIL-CLOSED minden ágon; a "nincs élő session" hibája KIMONDJA, hogy a
- * findingok a cache-ben MEGMARADTAK — a user nem hiheti, hogy elvesztek
- * (pontosan az a kár, ami ellen a hibrid réteg készült).
+ * FAIL-CLOSED on every branch; the "no live session" error STATES that the
+ * findings REMAIN in the cache — the user must not think they were lost
+ * (exactly the harm this hybrid layer was built against).
  *
- * ÜRES listára NEM hívunk hunkot: a 0 komment apply-a csak zaj.
+ * For an EMPTY list, we don't call hunk at all: applying 0 comments is just
+ * noise.
  */
 export function applyAnswerFindings(repoRoot, findings) {
   const list = Array.isArray(findings) ? findings : []
@@ -169,24 +176,25 @@ export function applyAnswerFindings(repoRoot, findings) {
     { encoding: 'utf8', input: answerFindingsPayload(list) },
   )
   const spawnErr = spawnFailure(res, 'hunk')
-  if (spawnErr) throw new Error(`a válasz-findingok betöltése nem indítható: ${spawnErr}`)
+  if (spawnErr) throw new Error(`cannot start loading the answer findings: ${spawnErr}`)
   if (res.status !== 0) {
     if (isNoActiveSession(res)) {
-      // NEM a `review` kontextus szövege: az azt mondaná, "tokent NEM
-      // költöttünk" — itt viszont a review MÁR LEFUTOTT, csak a betöltés bukott.
+      // NOT the `review` context's wording: that would say "we did NOT spend
+      // tokens" — here, however, the review has ALREADY RUN, only the load
+      // failed.
       throw new Error(
-        `nincs élő hunk-session erre a repóra (${repoRoot}), ezért a válasz-findingok nem `
-        + `tölthetők be. A findingok a cache-ben MEGMARADTAK (mind a ${list.length}) — a költés nem veszett el. `
-        + `Mit tegyél: ${HUNK_SESSION_HINT}, aztán a betöltés újra felajánlható (Enter a PR-panelen).`,
+        `there is no live hunk session for this repo (${repoRoot}), so the answer `
+        + `findings cannot be loaded. The findings REMAIN in the cache (all ${list.length}) — the spend wasn't lost. `
+        + `What to do: ${HUNK_SESSION_HINT}, then the load can be offered again (Enter on the PR panel).`,
       )
     }
     throw new Error(
-      `a válasz-findingok betöltése a hunk sessionbe nem sikerült (exit ${res.status}): `
-      + `${(res.stderr || res.stdout || '').trim() || '(nincs kimenet)'} — a findingok a cache-ben MEGMARADTAK.`,
+      `loading the answer findings into the hunk session failed (exit ${res.status}): `
+      + `${(res.stderr || res.stdout || '').trim() || '(no output)'} — the findings REMAIN in the cache.`,
     )
   }
-  // A MÉRT sikersor: "Applied N live comments". Ha az alak változna, a
-  // beküldött darabszám az őszinte fallback (exit 0 mellett).
+  // The MEASURED success line: "Applied N live comments". If the shape
+  // changes, the submitted count is the honest fallback (with exit 0).
   const applied = /Applied\s+(\d+)\s+live comment/i.exec(String(res.stdout ?? ''))
   return applied ? Number(applied[1]) : list.length
 }

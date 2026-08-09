@@ -1,64 +1,65 @@
-// tui-core — a review-munkaállomás TISZTA logikájának BARRELJE.
+// tui-core — the BARREL for the review workstation's PURE logic.
 //
-// EZ A FÁJL MA MÁR CSAK ÚJRAEXPORTÁL. A tényleges implementáció a bin/next/*
-// modulokban él (lásd a rétegrendet lentebb); ez a modul a KÜLSŐ SZERZŐDÉS
-// egyetlen belépési felülete a core felé.
+// THIS FILE NOW ONLY RE-EXPORTS. The actual implementation lives in the
+// bin/next/* modules (see the layer order below); this module is the single
+// entry surface of the EXTERNAL CONTRACT toward the core.
 //
-// MIÉRT MARAD MEG, ha semmit nem implementál: a fogyasztók 175 nevet EZEN AZ
-// ÚTON címeznek — a test/next.test.ts a `mergeBlockers`-t innen importálja, a
-// test/verify-silent.test.ts 16 dinamikus `import()`-tal ezt a fájlt tölti be, a
-// next-tui / next-poll / next-cache tesztek szintén. A barrel a modul-vágást a
-// fogyasztók számára LÁTHATATLANNÁ teszi.
+// WHY IT STILL EXISTS, given it implements nothing: consumers address 175
+// names THROUGH THIS PATH — test/next.test.ts imports `mergeBlockers` from
+// here, test/verify-silent.test.ts loads this file with 16 dynamic
+// `import()`s, and the next-tui / next-poll / next-cache tests do too. The
+// barrel makes the module split INVISIBLE to consumers.
 //
-// Miért KÜLÖN modul a belépési ponttól (tui.mjs) és a React-rétegtől
-// (tui-app.mjs): korábban a belépési pont maga tartotta ezeket a
-// függvényeket, az app.mjs pedig visszaimportált rá — ez KÖRKÖRÖS ESM-import
-// volt. Entryként futtatva a ciklus nem tud bezáródni (a modul még kiértékelés
-// alatt van, amikor az app visszaimportál), így a dinamikus import top-level
-// await-je sosem settle-elt: a node exit 13-cal, ÜRES kimenettel halt meg — a
-// TTY-s `queue` néma no-op volt. A függőségi irány ezért most SZIGORÚAN egyirányú:
+// Why a SEPARATE module from the entry point (tui.mjs) and the React layer
+// (tui-app.mjs): the entry point used to hold these functions itself, and
+// app.mjs imported them back — that was a CIRCULAR ESM import. Run as the
+// entry, the cycle could never close (the module is still being evaluated
+// when the app imports back into it), so the dynamic import's top-level
+// await never settled: node died with exit 13 and EMPTY output — the TTY
+// `queue` was a silent no-op. The dependency direction is therefore now
+// STRICTLY one-way:
 //
 //   tui.mjs (entry) ──> tui-app.mjs (React/Ink) ──┐
 //                     └────────────────────────────────────────────> core
 //
-// A core SENKIT nem importál a másik kettő közül, és nem importál vissza saját
-// magára. Ezt a test/next-tui-module.test.ts statikus invariánsként is ellenőrzi, a
-// belépési pontot pedig smoke-teszt indítja el valódi processzként.
+// The core imports NEITHER of the other two, and never imports back into
+// itself. test/next-tui-module.test.ts checks this as a static invariant,
+// and the entry point is launched by a smoke test as a real process.
 //
-// A BIN/NEXT/* RÉTEGREND (a nyíl "importálja" irányban, SOSEM visszafelé):
+// THE BIN/NEXT/* LAYER ORDER (the arrow reads "imports", NEVER the reverse):
 //
-//   layout, proc, review-store       ← nulla projekt-import (a legalsó réteg)
+//   layout, proc, review-store       ← zero project imports (the bottom layer)
 //     ├─> cache, rows, merge
 //     ├─> poll, queue-fetch, hunk ─> hunk-findings
 //     ├─> allowlist, diagnosis
 //     │     └─> ai-review-config ─> ai-review-view
 //     │           └─> ai-review-run ─> ai-review-agent
-//     └─> panel                      ← a legfelső core-réteg
+//     └─> panel                      ← the top core layer
 //
-// A KÖRKÖRÖS IMPORT TILOS, és ezt GÉPILEG őrizzük: a
-// scripts/check-next-modules.mjs statikus gráfot épít és cikluson bukik — MÉG A
-// MODUL BETÖLTÉSE ELŐTT, mert maga a ciklus fagyasztaná meg az ellenőrzőt is
-// (MÉRVE: egy szándékos layout→rows ciklus 2 percre akasztotta a checkert).
-// Ugyanaz a script a SZABAD (fel nem oldott) identifiereket is elkapja: az ESM
-// azokat nem a betöltéskor, hanem a HÍVÁSKOR oldja fel, tehát egy rossz helyre
-// került függvény minden `import`-tal ÁTMEGY, és csak élesben dob. MÉRVE ezen a
-// vágáson: a rows.mjs egy core-ban maradt `reviewSpinnerFlag`-et hívott — mind a
-// 9 modul "loads OK" volt, mégis 58 teszt bukott.
+// CIRCULAR IMPORTS ARE FORBIDDEN, and we guard this MECHANICALLY:
+// scripts/check-next-modules.mjs builds a static graph and fails on a cycle
+// — BEFORE THE MODULE EVEN LOADS, because the cycle itself would hang the
+// checker too (MEASURED: a deliberate layout→rows cycle once hung the
+// checker for 2 minutes). The same script also catches FREE (unresolved)
+// identifiers: ESM resolves those not at load time but at CALL time, so a
+// function misplaced into the wrong module PASSES every `import` and only
+// throws in production. MEASURED on this exact cut: rows.mjs called a
+// `reviewSpinnerFlag` left behind in core — all 9 modules said "loads OK",
+// yet 58 tests failed.
 //
-// Az adatforrás KIZÁRÓLAG az `tuipr queue --json` (a (b) csomag kanonikus
-// modellje) — a klasszifikációt, a landolhatóságot és az approve-olhatóságot itt
-// NEM számoljuk újra, csak leképezzük. Ez szándékos: a duplikált döntési lánc
-// szülte azt az elcsúszást, amit a (b) csomag épp megszüntetett.
+// The data source is EXCLUSIVELY `tuipr queue --json` (the canonical model
+// of package (b)) — classification, landability and approvability are NOT
+// recomputed here, only mapped. This is deliberate: a duplicated decision
+// chain is exactly what produced the drift that package (b) just eliminated.
 //
-// Az akciók (review / findings / approve / merge) a meglévő NON-INTERAKTÍV
-// utakat hívják (`tuipr approve --yes`, `gh pr merge`, `gh api`), tehát a
-// TUI vezérlő, nem pedig párhuzamos implementáció.
+// The actions (review / findings / approve / merge) call the existing
+// NON-INTERACTIVE paths (`tuipr approve --yes`, `gh pr merge`, `gh api`), so
+// the TUI is a controller, not a parallel implementation.
 //
-// A tiszta függvények (buildRows / canApproveRow / canMergeRow / displayWidth /
-// titleBudget / reviewBody / reviewCommand / toGithubComments) a
-// test/next-tui.test.ts-ben unit-teszt alatt vannak. A process-indítók
-// (fetchQueue / fetchPrRefs / hunkComments / uploadFindings) manuális
-// verifikációt kapnak.
+// The pure functions (buildRows / canApproveRow / canMergeRow / displayWidth
+// / titleBudget / reviewBody / reviewCommand / toGithubComments) are under
+// unit test in test/next-tui.test.ts. The process launchers (fetchQueue /
+// fetchPrRefs / hunkComments / uploadFindings) get manual verification.
 
 export * from './lib/ai-review-config.mjs'
 export * from './lib/ai-review-agent.mjs'

@@ -1,47 +1,53 @@
-// tuipr — DIAGNOSIS: a conflict-diagnózis ÉRTELMEZÉSE és a progresszív mérés.
+// tuipr — DIAGNOSIS: the INTERPRETATION of the conflict diagnosis and the
+// progressive measurement.
 //
-// Ami itt lakik: a diagnózis → ajánlás leképezés (a FANTOM-CULPRIT szemantika),
-// a dep-jelzés magyarázata (`i`), a progresszív mérés állapotgépe + NDJSON-
-// olvasó + a mérés-indító, és az info-modell.
+// What lives here: the diagnosis → recommendation mapping (the
+// PHANTOM-CULPRIT semantics), the explanation of the dep signal (`i`), the
+// progressive-measurement state machine + NDJSON reader + measurement
+// launcher, and the info model.
 //
-// RÉTEGREND: lefelé importál (merge: a landolhatóság blokkolói; proc: spawn-
-// diagnózis és NEXT_SH). SEMMIT nem importál a core-ból vagy felette.
+// LAYER ORDER: imports downward (merge: the landing blockers; proc: spawn
+// diagnosis and NEXT_SH). Imports NOTHING from core or above.
 //
-// KÜLÖN A QUEUE-FETCH-TŐL: az adatforrás-hívás a BESZERZÉS, ez az ÉRTELMEZÉS.
-// A `fetchDiagnosis` MÉGIS itt van, mert a `conflict --json` szerződése és a
-// belőle olvasó `conflictAdvice` EGY témát alkot — a mérést a TUI NEM
-// implementálja újra, csak a subcommandot hívja.
+// SEPARATE FROM QUEUE-FETCH: the data-source call is the ACQUISITION, this is
+// the INTERPRETATION. `fetchDiagnosis` lives here NONETHELESS, because the
+// `conflict --json` contract and the `conflictAdvice` that reads it form ONE
+// topic — the TUI does NOT reimplement the measurement, it just calls the
+// subcommand.
 import { canMergeRow, mergeBlockers } from './merge.mjs'
 import { NEXT_SH, spawnFailure } from './proc.mjs'
 import { spawn, spawnSync } from 'node:child_process'
 
-// --- Conflict-diagnózis → ajánlás ------------------------------------------
+// --- Conflict diagnosis → recommendation ------------------------------------
 
 /**
- * Az `tuipr conflict --json` diagnózisából a TUI teendő-ajánlása.
+ * The TUI's action recommendation from the `tuipr conflict --json` diagnosis.
  *
- * A stackelés-ajánlás szabálya MÉRÉSEN alapul (a recon az éles #911-en
- * kipróbálta): CSAK akkor ajánljuk, ha
- *   (a) a main-nel NINCS conflict — különben előbb a main-re rebase kell, és
- *       a stackelés csak elodázná a valódi bajt, illetve
- *   (b) PONTOSAN EGY culprit van — a stackelés egyszerre egyetlen PR-ra tud
- *       mutatni, tehát több culpritnál eleve részleges. A #911-en négy culprit
- *       volt, és a mérés szerint mind a négyet bázisba téve (composite base) IS
- *       maradt conflict: ott a stackelés HAMIS biztonságot adott volna, a helyes
- *       válasz a queue-sorrend kivárása.
+ * The stacking-recommendation rule is based on a MEASUREMENT (recon tried it
+ * out live on #911): we recommend it ONLY if
+ *   (a) there is NO conflict with main — otherwise a rebase onto main is
+ *       needed first, and stacking would only postpone the real problem, and
+ *   (b) there is EXACTLY ONE culprit — stacking can only point at a single PR
+ *       at a time, so with more than one culprit it's partial by definition.
+ *       #911 had four culprits, and per the measurement, putting all four
+ *       into the base (composite base) STILL left a conflict: there, stacking
+ *       would have given FALSE confidence — the correct answer is waiting out
+ *       the queue order.
  *
- * Amit NEM ellenőrzünk itt, szándékosan: hogy az ütköző fájl generált/lock fájl-e
- * (`pnpm-lock.yaml`, `package.json`), és hogy a culprit talapzat maga
- * blokkolt-e. Ezek a recon szerint további kizáró okok, de a megítélésük a
- * useré — a `summary` megnevezi a fájlokat, hogy LÁSSA, mibe stackelne.
- * A stackelés amúgy is csak megerősítéssel fut le.
+ * What we deliberately do NOT check here: whether the colliding file is a
+ * generated/lock file (`pnpm-lock.yaml`, `package.json`), and whether the
+ * culprit's own base is itself blocked. Per recon these are further
+ * disqualifying reasons, but judging them is the user's call — the `summary`
+ * names the files so they can SEE what they'd be stacking onto. Stacking only
+ * runs with confirmation anyway.
  */
 export function conflictAdvice(diag) {
-  // A LANDOLHATÓ culpritok: csak azokra lehet stackelni, és a queue-sorrend is
-  // csak őket oldja fel. A `candLandable === false` jelölt a main-nel ütközik,
-  // tehát a CI skippeli — sosem lesz a next része. (Ha a mező hiányzik, a régi
-  // szerződés szerinti diagnózist kapjuk: ott nem mértük, ezért nem is
-  // állíthatjuk, hogy nem landol → landolhatónak vesszük.)
+  // The LANDABLE culprits: only these can be stacked onto, and the queue
+  // order only resolves these. A `candLandable === false` candidate conflicts
+  // with main, so CI skips it — it will never be part of next. (If the field
+  // is missing, we're getting a diagnosis under the old contract: there we
+  // didn't measure it, so we also can't claim it won't land → we treat it as
+  // landable.)
   const all = diag.queueConflicts ?? []
   const landable = all.filter((c) => c.candLandable !== false)
   const unlandable = [
@@ -50,94 +56,103 @@ export function conflictAdvice(diag) {
   ]
   const culprits = landable.map((c) => c.number)
   const named = landable.map((c) => `#${c.number} (${c.files.join(', ')})`).join(', ')
-  // A FANTOMOKAT megnevezzük, de NEM teendőként: a user látja a next-conflict
-  // labelt, és tudni akarja, miért nincs vele dolga.
+  // We NAME the PHANTOMS, but NOT as an action item: the user sees the
+  // next-conflict label and wants to know why there's nothing to do about it.
   const phantomNote = unlandable.length === 0
     ? ''
-    : ` Megjegyzés: ${unlandable.map((c) => `#${c.number}`).join(', ')} szintén ütközik veled, `
-      + 'de ő maga sem landolható (a main-nel conflictol), tehát a next-be sem épül be — teendő vele nincs.'
-  // A MÉRÉS SZEMANTIKÁJA vs. a CI művelete. A próba `git merge-tree`-vel
-  // MERGE-öt szimulál (net diff), a CI viszont commitonként REBASE-el
-  // (NEXT_STRATEGY: rebase, merge-fallback nélkül). MÉRVE: egy módosít-majd-
-  // visszaállít PR-on a merge-tree exit 0 (CLEAN), a `git rebase` viszont
-  // CONFLICT + exit 1. Ezt a különbséget minden nem-blokkoló verdictnél ki kell
-  // mondani, különben "nincs teendő"-t olvas a user, ahol van.
+    : ` Note: ${unlandable.map((c) => `#${c.number}`).join(', ')} also conflicts with you, `
+      + 'but it is not landable itself either (it conflicts with main), so it will not be built into next either — nothing to do about it.'
+  // The SEMANTICS OF THE MEASUREMENT vs. the CI's operation. The probe
+  // simulates a MERGE with `git merge-tree` (net diff), whereas CI REBASEs
+  // commit by commit (NEXT_STRATEGY: rebase, no merge-fallback). MEASURED: on
+  // a modify-then-revert PR, merge-tree exits 0 (CLEAN), while `git rebase`
+  // hits CONFLICT + exit 1. This difference must be spelled out on every
+  // non-blocking verdict, otherwise the user reads "nothing to do" where
+  // there is something.
   //
-  // MIÉRT KÜLÖN MEZŐ, ÉS MIÉRT NEM A SUMMARY VÉGÉN (a régi alak): a caveat
-  // MINDEN nem-blokkoló verdicten SZÓ SZERINT UGYANAZ — a user bejelentése
-  // szerint ez warning fatigue-ot termel (a negyedik PR-nál már át sem olvassa).
-  // A panel ezért progresszív disclosure-rel rejti el (csukott lábjegyzet-sor +
-  // Enter), ÉS EZ CSAK ÚGY LEHETSÉGES, ha a caveat NEM ugyanabban a stringben ül,
-  // mint a TEENDŐ (stackelés-ajánlás, "várd meg a #N landolását"). A régi kód
-  // NÉGY helyen fűzte be konkatenációval; a disclosure ott vagy a teendőt is
-  // elrejtette volna, vagy a nézetnek regexszel kellett volna kihasítania a
-  // caveatet — az pedig egy MÁSODIK, elcsúszó szöveg-forrás.
+  // WHY A SEPARATE FIELD, AND WHY NOT AT THE END OF THE SUMMARY (the old
+  // shape): the caveat is VERBATIM THE SAME on EVERY non-blocking verdict —
+  // per the user's report this produces warning fatigue (by the fourth PR
+  // they no longer even read it). The panel therefore hides it with
+  // progressive disclosure (a closed footnote line + Enter), AND THIS IS ONLY
+  // POSSIBLE if the caveat does NOT sit in the same string as the ACTION ITEM
+  // (stacking recommendation, "wait for #N to land"). The old code spliced it
+  // in via concatenation in FOUR places; disclosure there would have either
+  // hidden the action item too, or the view would have had to carve the
+  // caveat out with a regex — which is a SECOND, drifting text source.
   //
-  // AZ ALAK `{ text, command }`: a PARANCS külön áll, mert a nézet CYAN sorban
-  // rendereli (a panel minden más végrehajtandó parancsát is így írja). A
-  // parancsnak MEG KELL MARADNIA valamilyen alakban a csukott állapotban is —
-  // ez a UI EGYETLEN helye, ahol a `git rebase origin/next` felszólítás
-  // elhangzik, és MÉRT tényen áll (merge-tree exit 0 vs. git rebase CONFLICT).
+  // THE SHAPE `{ text, command }`: the COMMAND stands apart because the view
+  // renders it in a CYAN line (the panel renders every other actionable
+  // command the same way). The command MUST remain visible in some form even
+  // in the closed state — this is the UI's ONLY place where the
+  // `git rebase origin/next` instruction is voiced, and it rests on a
+  // MEASURED fact (merge-tree exit 0 vs. git rebase CONFLICT).
   //
-  // A `--json` út NEM ÉRINTETT: ott a bash `recommendation` mezője beszél, ami
-  // külön szöveg, és a caveatjét maga hordozza.
+  // THE `--json` PATH IS NOT AFFECTED: there the bash `recommendation` field
+  // speaks, which is separate text and carries its own caveat.
   //
-  // (wf31/4) A `detail` MEZŐ: a VERDICT-REDUNDANCIA HELYE. A user lelete, szó
-  // szerint: "A Verdict clean ugyanaz, mint a »nem talált conflictot«, tehát a
-  // »nem talált conflictot« már elrejtendő részlet."
+  // (wf31/4) THE `detail` FIELD: THE HOME OF THE VERDICT-REDUNDANCY. The
+  // user's finding, verbatim: "Verdict clean is the same as 'found no
+  // conflict', so 'found no conflict' is already a detail to hide."
   //
-  // A MÉRT DUPLIKÁCIÓ a clean-panelen NÉGY sor, HÁROM azonos állítással:
-  //     ✓ main: nincs conflict
-  //     ✓ next-en belül: nincs ütközés (4 jelölt megmérve)
+  // THE MEASURED DUPLICATION on the clean panel is FOUR lines with THREE
+  // identical statements:
+  //     ✓ main: no conflict
+  //     ✓ within next: no collision (4 candidates measured)
   //     Verdict: clean
-  //     A merge-tree próba NEM talált conflictot (4 jelölt megmérve) — se a
-  //     main-nel, se a queue-ban előtte állókkal.
-  // A negyedik sor a fölötte lévő HÁROM ÖSSZEGZÉSE, új információ nélkül: a
-  // "NEM talált conflictot" = a `Verdict: clean`, a "se a main-nel, se a
-  // queue-ban előtte állókkal" = pontosan a két mérési sor.
+  //     The merge-tree probe found NO conflict (4 candidates measured) —
+  //     neither with main, nor with those ahead of it in the queue.
+  // The fourth line is a SUMMARY of the THREE lines above it, with no new
+  // information: "found NO conflict" = `Verdict: clean`, "neither with main,
+  // nor with those ahead of it in the queue" = exactly the two measurement
+  // lines.
   //
-  // A MEGOLDÁS A MEGLÉVŐ DISCLOSURE-T HASZNÁLJA, nem újat épít: a szöveg a
-  // `caveat.detail`-be kerül, amit a `caveatLines` a NYITOTT ágon renderel
-  // (Enter-toggle). Csukva marad a `Verdict: clean` + az egysoros `…`
-  // affordance — pontosan az, amit a user kért.
+  // THE SOLUTION USES THE EXISTING DISCLOSURE, it doesn't build a new one:
+  // the text goes into `caveat.detail`, which `caveatLines` renders on the
+  // OPEN branch (Enter-toggle). Closed, only `Verdict: clean` + the one-line
+  // `…` affordance remain — exactly what the user asked for.
   //
-  // MIÉRT NEM TÖRÖLTEM: a jelölt-szám (`N jelölt megmérve`) a MÉRÉS
-  // TERJEDELMÉT mondja ki, ami attesztációs tény — az elrejtés nem törlés. A
-  // `detail` mező tehát ELREJT, de MEGŐRIZ.
+  // WHY I DIDN'T DELETE IT: the candidate count (`N candidates measured`)
+  // states the SCOPE OF THE MEASUREMENT, which is an attestation fact —
+  // hiding is not deleting. The `detail` field therefore HIDES, but
+  // PRESERVES.
   //
-  // MIÉRT A CAVEAT-BLOKKBA, ÉS MIÉRT NEM EGY HARMADIK TOGGLE-BA: a caveat
-  // ugyanarról a MÉRÉSRŐL beszél (mit szimulált, mit nem lát), a `detail` pedig
-  // annak a mérésnek az EREDMÉNYE. Egy második, konkurrens toggle ugyanarra a
-  // fogalomra két kulcsot kívánna a már telített készletben.
+  // WHY INTO THE CAVEAT BLOCK, AND WHY NOT A THIRD TOGGLE: the caveat talks
+  // about the same MEASUREMENT (what it simulated, what it doesn't see), and
+  // `detail` is the RESULT of that measurement. A second, competing toggle
+  // would want two keys for the same concept in an already crowded set.
   const probeCaveat = {
-    text: 'A mérés MERGE-öt szimulál, a CI viszont REBASE-el — commit-szintű '
-      + 'ütközést ez a próba nem lát. A biztos válasz:',
+    text: 'The measurement simulates a MERGE, but CI REBASEs — this probe '
+      + 'does not see commit-level collisions. The certain answer:',
     command: 'git rebase origin/next <branch>',
-    // A `detail` az ÁG-SPECIFIKUS mérési eredmény — a `clean` ágon a
-    // "nem talált conflictot" mondat kerül ide (lásd ott). A többi ágon `null`:
-    // ott a summary TEENDŐT hordoz (stackelés, rebase), nem redundanciát.
+    // The `detail` is the BRANCH-SPECIFIC measurement result — on the
+    // `clean` branch the "found no conflict" sentence goes here (see there).
+    // `null` on the other branches: there the summary carries an ACTION ITEM
+    // (stacking, rebase), not redundancy.
     detail: null,
   }
 
-  // A STACKELT PR-t a subcommand nem mérte meg (a sorsa a talapzatán dől el), és
-  // a diagnózisa üres queueConflicts + mainConflict=false — vagyis a naiv
-  // ágsorrend "nincs mért conflict"-ot mondana, ami HAZUG: nem is mértünk. Ez
-  // ugyanaz a hibaosztály, mint a "(main-drift)" felirat volt, ezért ez az ág
-  // MINDEN más előtt áll.
+  // The subcommand did NOT measure a STACKED PR (its fate is decided by its
+  // base), and its diagnosis is empty queueConflicts + mainConflict=false —
+  // meaning the naive branch order would say "no conflict measured", which is
+  // A LIE: we didn't even measure. This is the same error class as the
+  // "(main-drift)" label was, which is why this branch comes before every
+  // other one.
   if (diag.verdict === 'stacked') {
     const on = diag.stackedOn === null || diag.stackedOn === undefined
-      ? `a(z) ${diag.baseRef} branch`
-      : `a #${diag.stackedOn}`
+      ? `the ${diag.baseRef} branch`
+      : `#${diag.stackedOn}`
     return {
       offerStack: false,
       stackOn: null,
       command: null,
-      // NINCS CAVEAT: a stackelt PR-t NEM IS MÉRTÜK, tehát a merge-vs-rebase
-      // eltérésnek itt nincs mire vonatkoznia. A `null` (nem `''`) a nézetnek
-      // GÉPI válasz a "van-e lábjegyzet?" kérdésre — üres stringből egy üres,
-      // dimmelt lábjegyzet-sor renderelődött volna.
+      // NO CAVEAT: the stacked PR was NOT EVEN MEASURED, so the
+      // merge-vs-rebase discrepancy has nothing to apply to here. The `null`
+      // (not `''`) is a MACHINE-READABLE answer for the view to the "is
+      // there a footnote?" question — an empty string would have rendered an
+      // empty, dimmed footnote line.
       caveat: null,
-      summary: `Ez egy STACKELT PR: ${on} a talapzata, tehát a sorsa ott dől el — a next a talapzatán keresztül tartalmazza. Diagnosztizáld a talapzatot.`,
+      summary: `This is a STACKED PR: ${on} is its base, so its fate is decided there — next contains it via its base. Diagnose the base.`,
     }
   }
   if (diag.mainConflict) {
@@ -145,17 +160,18 @@ export function conflictAdvice(diag) {
       offerStack: false,
       stackOn: null,
       command: null,
-      // NINCS CAVEAT: itt a rebase MAGA a teendő (a summary ki is mondja), nem
-      // egy mérési fenntartás. Lábjegyzetbe tenni azt jelentené, hogy a
-      // legfontosabb teendőt rejtjük el.
+      // NO CAVEAT: here the rebase ITSELF is the action item (the summary
+      // says so too), not a measurement caveat. Putting it in a footnote
+      // would mean hiding the most important action item.
       caveat: null,
-      summary: `VALÓDI conflict a main-nel: ${(diag.mainConflictFiles ?? []).join(', ')} — ez blokkolja a landolást. Rebase-eld main-re.`,
+      summary: `REAL conflict with main: ${(diag.mainConflictFiles ?? []).join(', ')} — this blocks landing. Rebase onto main.`,
     }
   }
   if (culprits.length === 0) {
-    // KÜLÖN ÁG, ha MÉRTÜNK conflictot, de MINDEN culprit fantom. A "NEM talált
-    // conflictot" szöveg itt HAZUG lenne: találtunk, csak a culpritok maguk sem
-    // landolnak. A user a next-conflict labelt látja — magyarázatot érdemel.
+    // A SEPARATE BRANCH for when we MEASURED a conflict, but EVERY culprit is
+    // a phantom. The "found NO conflict" text would be A LIE here: we did
+    // find one, only the culprits themselves don't land either. The user
+    // sees the next-conflict label — they deserve an explanation.
     if (unlandable.length > 0) {
       const namedPhantoms = unlandable.map((c) => `#${c.number} (${c.files.join(', ')})`).join(', ')
       return {
@@ -163,103 +179,115 @@ export function conflictAdvice(diag) {
         stackOn: null,
         command: null,
         caveat: probeCaveat,
-        summary: `A main-nel NINCS conflict — a landolásod nincs veszélyben. A next-en ütközöl `
-          + `(${namedPhantoms}), DE egyik ütköző PR sem landolható maga sem (mind a main-nel `
-          + `conflictol), tehát a next-be sem épülnek be. Teendő: nincs a te oldalon — a `
-          + `next-conflict label a következő rebuildig maradhat.`,
+        summary: `There is NO conflict with main — your landing is not at risk. You collide on `
+          + `next (${namedPhantoms}), BUT none of the colliding PRs are landable themselves either `
+          + `(all of them conflict with main), so they won't be built into next either. Action `
+          + `item: none on your side — the next-conflict label can stay until the next rebuild.`,
       }
     }
     return {
       offerStack: false,
       stackOn: null,
       command: null,
-      // (wf31/4) A MÉRÉS EREDMÉNYE A CAVEAT `detail`-JÉBE KERÜLT, a summary ÜRES.
+      // (wf31/4) THE MEASUREMENT RESULT MOVED INTO THE CAVEAT'S `detail`, the
+      // summary is EMPTY.
       //
-      // A user: "A Verdict clean ugyanaz, mint a »nem talált conflictot«, tehát a
-      // »nem talált conflictot« már elrejtendő részlet." A mondat a fölötte lévő
-      // HÁROM sort (a két mérési sort + a `Verdict: clean`-t) összegezte, új
-      // információ nélkül — a redundancia MÉRHETŐ, nem vélemény.
+      // The user: "Verdict clean is the same as 'found no conflict', so
+      // 'found no conflict' is already a detail to hide." The sentence
+      // summarized the THREE lines above it (the two measurement lines + the
+      // `Verdict: clean`), with no new information — the redundancy is
+      // MEASURABLE, not an opinion.
       //
-      // (wf31/32) KÉT ÚT, KÉT SZÖVEG — ÉS A `ci` ÁGON NINCS CAVEAT.
+      // (wf31/32) TWO PATHS, TWO TEXTS — AND THE `ci` BRANCH HAS NO CAVEAT.
       //
-      // `nextFrom: 'ci'` — a PR BENT VAN a next-ben, tehát a CI KUMULATÍV
-      // rebase-e átment rajta. A merge-vs-rebase fenntartás itt NEM alkalmazható:
-      // a CI TÉNYLEGESEN rebase-elt, nem mi szimuláltunk merge-öt. Egy odaírt
-      // caveat azt sugallná, hogy bizonytalanabbak vagyunk, mint amilyenek — és
-      // pontosan azt a fenntartás-inflációt termelné, amit a user máshol is
-      // kifogásolt. A `detail` viszont KIMONDJA, honnan tudjuk.
+      // `nextFrom: 'ci'` — the PR IS IN next, so CI's CUMULATIVE rebase went
+      // through it cleanly. The merge-vs-rebase caveat does NOT apply here:
+      // CI ACTUALLY rebased, we didn't simulate a merge. A caveat tacked on
+      // here would suggest we're less certain than we are — and would
+      // produce exactly the caveat inflation the user objected to elsewhere.
+      // The `detail`, however, STATES how we know.
       //
-      // `nextFrom: 'probe'` — LOKÁLIS páros merge-tree. Itt a caveat KÖTELEM (a
-      // próba merge-öt szimulál, a CI rebase-el), és a jelölt-szám is releváns.
+      // `nextFrom: 'probe'` — a LOCAL pairwise merge-tree. Here the caveat is
+      // MANDATORY (the probe simulates a merge, CI rebases), and the
+      // candidate count is also relevant.
       caveat: diag.nextFrom === 'ci'
         ? {
-            // A `text`/`command` ELMARAD: nincs fenntartás, amit ki kellene
-            // mondani, és egy `git rebase origin/next` felszólítás egy MÁR
-            // beépült PR-on értelmetlen teendő lenne.
+            // `text`/`command` ARE OMITTED: there's no caveat to state, and a
+            // `git rebase origin/next` instruction would be a meaningless
+            // action item on a PR that's ALREADY built in.
             text: '',
             command: '',
-            detail: 'A main-nel NINCS conflict (mérve), a next-be pedig MÁR BEÉPÜLT — '
-              + 'a CI kumulatív rebase-e átment rajta. A queue-belső prefixet ezért '
-              + 'nem kellett megmérni.',
+            detail: 'There is NO conflict with main (measured), and it has '
+              + 'ALREADY BEEN BUILT INTO next — the CI cumulative rebase went '
+              + 'through it cleanly. The queue-internal prefix therefore did '
+              + 'not need to be measured.',
           }
         : {
             ...probeCaveat,
-            detail: `A merge-tree próba NEM talált conflictot (${diag.probed} jelölt megmérve) — `
-              + `se a main-nel, se a queue-ban előtte állókkal.`,
+            detail: `The merge-tree probe found NO conflict (${diag.probed} candidates measured) — `
+              + `neither with main, nor with those ahead of it in the queue.`,
           },
-      // AZ ÜRES STRING, NEM `null`: a mező TÍPUSA marad string (a `--json` út és
-      // a többi ág is stringet ad), tehát egyetlen fogyasztónak sem kell
-      // null-ágat írnia. A NÉZET pedig az üres summary-ból NEM SZÜL SORT
-      // (`infoBody`) — egy üres sor-leíró ugyanazt a MAGASSÁGOT vinné el, mint
-      // egy tartalmas, és a `clipBodyLines` MEGJELENÍTETT sorokat számol
-      // (a wf28/3-as gap-sor hibaosztálya).
+      // EMPTY STRING, NOT `null`: the field's TYPE stays string (the
+      // `--json` path and the other branches also give a string), so no
+      // consumer has to write a null branch. And the view does NOT SPAWN A
+      // LINE (`infoBody`) from an empty summary — an empty line descriptor
+      // would take up the same HEIGHT as a substantive one, and
+      // `clipBodyLines` counts DISPLAYED lines (the wf28/3 gap-line error
+      // class).
       summary: '',
     }
   }
   if (culprits.length === 1) {
     const on = culprits[0]
     return {
-      // (wf31/68) A MEZŐ NEVE TÖRTÉNETI — MÁR NEM AJÁNLAT, HANEM CÉL-JELÖLÉS.
+      // (wf31/68) THE FIELD NAME IS HISTORICAL — IT'S NO LONGER A
+      // RECOMMENDATION, BUT A TARGET DESIGNATION.
       //
-      // A `true` innentől annyit jelent: VAN egyértelmű stack-cél (pontosan egy
-      // landolható culprit), tehát a TUI fel tudja kínálni az `s` gombot. A
-      // SZÖVEG viszont nem ajánl — lásd a summary indoklását.
+      // From here on `true` only means: THERE IS a clear stacking target
+      // (exactly one landable culprit), so the TUI can offer the `s` key.
+      // The TEXT, however, does not recommend — see the reasoning for the
+      // summary.
       offerStack: true,
       stackOn: on,
-      // A végrehajtás a MEGLÉVŐ publish úton megy — nincs párhuzamos
-      // stackelés-implementáció a TUI-ban.
+      // Execution goes through the EXISTING publish path — there is no
+      // parallel stacking implementation in the TUI.
       command: `tuipr publish --stack-on ${on}`,
       caveat: probeCaveat,
-      // (wf31/68) A "A STACKELÉS VALÓSZÍNŰLEG FELOLDJA" ÍGÉRET KIVEZETVE —
-      // MÉRT SAJÁT HIBA, ÉS NEM BIZONYTALANSÁG, HANEM TÉVEDÉS VOLT.
+      // (wf31/68) THE "STACKING WILL PROBABLY RESOLVE IT" PROMISE WAS
+      // REMOVED — A MEASURED OWN ERROR, AND NOT UNCERTAINTY BUT A MISTAKE.
       //
-      // A user kérdése: "ha a conflict feloldást igényel, akkor minek ajánlunk
-      // fel stackelést? Nem segít semmin." — és a kódból levezetve igaza van,
-      // STRUKTURÁLISAN:
+      // The user's question: "if the conflict requires resolution, why are
+      // we recommending stacking at all? It doesn't help with anything." —
+      // and derived from the code, they are right, STRUCTURALLY:
       //
-      //   · a `queueConflicts` KIZÁRÓLAG valódi culpritokat tartalmaz (a bash
-      //     `$real` ága: akikkel a merge-tree conflictot MÉRT);
-      //   · tehát `culprits.length === 1` ⟹ VAN tartalmi ütközés a céllal;
-      //   · tehát a rá rebase-elés KÉZI FELOLDÁST igényel — mindig.
+      //   · `queueConflicts` contains EXCLUSIVELY real culprits (the bash
+      //     `$real` branch: those the merge-tree MEASURED a conflict with);
+      //   · so `culprits.length === 1` ⟹ THERE IS a substantive collision
+      //     with the target;
+      //   · so rebasing onto it requires MANUAL RESOLUTION — always.
       //
-      // Vagyis nem létezik olyan eset, amikor a felajánlott stackelés tisztán
-      // lefutna. A "valószínűleg" nem élesíthető méréssel: az állítás maga hamis.
-      // (Élesben ellenőrizve a #911 → #904 párra: a merge-tree ugyanazt az egy
-      // fájlt adta, mint a száraz rebase, ami a 74. commitnál conflictolt.)
+      // In other words, there is no case where the offered stacking would
+      // run through cleanly. "Probably" cannot be backed by measurement: the
+      // claim itself is false. (Verified live on the #911 → #904 pair: the
+      // merge-tree gave the same single file as the dry rebase, which
+      // conflicted at commit 74.)
       //
-      // AMIT A STACKELÉS VALÓJÁBAN TESZ: előrehozza ugyanazt a feloldást, amit a
-      // "várd meg a landolását" úton is el kell végezni — cserébe a PR a cél
-      // landolásáig KIKERÜL A NEXT-BŐL (a next-rebuild `--base main`-t szűr,
-      // egy stackelt PR base-e pedig nem main). Ez utóbbi eddig sehol nem
-      // szerepelt, és a user joggal hitte az ellenkezőjét.
+      // WHAT STACKING ACTUALLY DOES: it brings forward the same resolution
+      // that also has to be done on the "wait for it to land" path — in
+      // exchange the PR DROPS OUT OF NEXT until the target lands (the
+      // next-rebuild filters on `--base main`, and a stacked PR's base is
+      // not main). This latter point had not been stated anywhere until now,
+      // and the user rightly believed the opposite.
       //
-      // EZÉRT A SUMMARY MOST TÉNYT MOND, NEM TEENDŐT: a két út és az áruk. Hogy
-      // funkcionálisan rá épülsz-e, azt a gép NEM tudja — az a te döntésed, és a
-      // szöveg nem tesz úgy, mintha helyetted eldöntené.
-      summary: `A main-nel NINCS conflict — a landolásod nincs veszélyben. A next-en a ${named} PR-ral `
-        + `ütközöl. A feloldás elkerülhetetlen: vagy MOST, a #${on}-re stackelve (a rebase ugyanezekben a `
-        + `fájlokban conflictol, és a PR a #${on} landolásáig kikerül a next-ből), vagy a #${on} landolása `
-        + `UTÁN, main-re rebase-elve. A #${on} a main-nel MÉRVE nem ütközik, tehát stack-célként landolhat.`
+      // THAT'S WHY THE SUMMARY NOW STATES A FACT, NOT AN ACTION ITEM: the two
+      // paths and their cost. Whether you build on it functionally, the
+      // machine does NOT know — that's your decision, and the text doesn't
+      // act as if it decided for you.
+      summary: `There is NO conflict with main — your landing is not at risk. You collide on next with `
+        + `the ${named} PR. The resolution is unavoidable: either NOW, by stacking onto #${on} (the rebase `
+        + `conflicts in these same files, and the PR drops out of next until #${on} lands), or AFTER #${on} `
+        + `lands, by rebasing onto main. #${on} does NOT conflict with main, AS MEASURED, so it can land as `
+        + `a stacking target.`
         + `${phantomNote}`,
     }
   }
@@ -268,42 +296,48 @@ export function conflictAdvice(diag) {
     stackOn: null,
     command: null,
     caveat: probeCaveat,
-    // (wf31/68) ITT SEM ÍGÉRÜNK — ugyanaz a javítás, mint az egy-culpritos ágon.
+    // (wf31/68) NO PROMISE HERE EITHER — the same fix as on the
+    // single-culprit branch.
     //
-    // A "queue-sorrend valószínűleg feloldja" ugyanúgy hamis volt: a next-rebuild
-    // KUMULATÍVAN rebase-el, tehát a culpritok beépülése UTÁN a mi PR-unk rebase-e
-    // pontosan ugyanazokba a tartalmi ütközésekbe fut — kiesik (skipped), amíg a
-    // szerző fel nem oldja. A sorrend nem old fel semmit, csak elhalasztja.
-    summary: `A main-nel NINCS conflict. A next-en ${culprits.length} PR-ral ütközöl: ${named}. `
-      + `Stackelni nem tudsz (egy PR egyszerre egy bázisra mutat) — a feloldás a culpritok landolása `
-      + `után, main-re rebase-elve történik; addig a next-ből kimaradsz.`
+    // "The queue order will probably resolve it" was equally false: the
+    // next-rebuild rebases CUMULATIVELY, so AFTER the culprits are built in,
+    // our PR's rebase runs into exactly the same substantive collisions — it
+    // gets skipped until the author resolves it. The order doesn't resolve
+    // anything, it only postpones it.
+    summary: `There is NO conflict with main. You collide on next with ${culprits.length} PRs: ${named}. `
+      + `You cannot stack (a PR points at one base at a time) — the resolution happens after the culprits `
+      + `land, by rebasing onto main; until then you're left out of next.`
       + `${phantomNote}`,
   }
 }
 
-// --- "Miért dep?" — a dep-jelzés magyarázata ('i' billentyű) ---------------
+// --- "Why dep?" — the explanation of the dep signal ('i' key) --------------
 
-/** Hány közös fájlt sorolunk fel, mielőtt "+N további"-ra váltunk. */
+/** How many shared files to list before switching to "+N more". */
 const DEP_FILES_SHOWN = 8
 
 /**
- * A dep-jelzés MAGYARÁZATA egy sorra: mely fájlokban van metszet a dep-PR-ral.
+ * The EXPLANATION of the dep signal for one row: in which files there is an
+ * intersection with the dep PR.
  *
- * TISZTA függvény: a bemenete a `queue --json`-ból épült sor (buildRows), nincs
- * se process-hívás, se hálózat. A metszetet NEM itt számoljuk — azt a queue
- * jq-ja adja (depFiles), ugyanabban a passzban, ami a dep-számot is levezeti.
- * Ez szándékos: egy metszet-logika van, és a magyarázat nem divergálhat attól
- * a jelzéstől, amit magyaráz.
+ * A PURE function: its input is the row built from `queue --json`
+ * (buildRows), no process call, no network. We do NOT compute the
+ * intersection here — the queue's jq gives that (depFiles), in the same pass
+ * that also derives the dep number. This is deliberate: there is one
+ * intersection logic, and the explanation must not diverge from the signal
+ * it explains.
  *
- * A fájl-lista ISMERETLEN volta (dep van, depFiles üres) külön mező, nem
- * "nincs közös fájl": a queue dep-számítása FAIL-CLOSED, tehát adathiánynál is
- * jelent depet (nagy PR-nál a GitHub limitálja a files-listát). Ott az "üres
- * metszet" hamis mért ténynek látszana — ki kell mondani, hogy nem tudható.
+ * The file list being UNKNOWN (there is a dep, depFiles is empty) is a
+ * separate field, not "no shared files": the queue's dep computation is
+ * FAIL-CLOSED, so it also reports a dep when data is missing (GitHub limits
+ * the files list on large PRs). There, an "empty intersection" would look
+ * like a false measured fact — it must be stated that it's not knowable.
  */
 export function depExplanation(row, shown = DEP_FILES_SHOWN) {
-  // A stacked sornak nem "dep"-je van, hanem TALAPZATA: a base-e a queue-ban
-  // ül, a sorsa azon dől el. A dep-tengely ott nem értelmezett (a modell
-  // dep-je is null), ezért külön mondat jár neki, nem a "nincs dep".
+  // A stacked row doesn't have a "dep", it has a BASE: its base sits in the
+  // queue, and its fate is decided there. The dep axis is not defined there
+  // (the model's dep is also null), so it gets a separate sentence, not "no
+  // dep".
   if (row.stackedOn !== null && row.stackedOn !== undefined) {
     return {
       hasDep: false,
@@ -313,7 +347,7 @@ export function depExplanation(row, shown = DEP_FILES_SHOWN) {
       more: 0,
       moreLabel: '',
       filesUnknown: false,
-      summary: `#${row.number} stackelt PR — a talapzata a #${row.stackedOn}, a sorsa azon dől el. Nézd a #${row.stackedOn} sorát.`,
+      summary: `#${row.number} is a stacked PR — its base is #${row.stackedOn}, its fate is decided there. Look at #${row.stackedOn}'s row.`,
     }
   }
   if (!row.dep) {
@@ -325,7 +359,7 @@ export function depExplanation(row, shown = DEP_FILES_SHOWN) {
       more: 0,
       moreLabel: '',
       filesUnknown: false,
-      summary: `#${row.number}: nincs dep — a queue-ban előtte álló nyitott PR-ok egyikével sincs fájl-metszete.`,
+      summary: `#${row.number}: no dep — it has no file intersection with any of the open PRs ahead of it in the queue.`,
     }
   }
   const files = Array.isArray(row.depFiles) ? row.depFiles : []
@@ -338,97 +372,105 @@ export function depExplanation(row, shown = DEP_FILES_SHOWN) {
     files,
     shown: head,
     more,
-    moreLabel: more > 0 ? `… +${more} további` : '',
+    moreLabel: more > 0 ? `… +${more} more` : '',
     filesUnknown,
     summary: filesUnknown
-      // Fail-closed dep adathiánnyal: a függés ténye áll, a MIBEN nem.
-      ? `#${row.number} a #${row.dep}-től függ, de a közös fájlok listája NEM tudható (a files-adat hiányzik — nagy PR-nál a GitHub limitálja). A függést fail-closed jelentjük.`
-      : `#${row.number} a #${row.dep}-gyel közös: ${head.join(', ')}${more > 0 ? ` (+${more} további)` : ''}`,
+      // Fail-closed with missing dep data: the fact of the dependency
+      // stands, the WHAT-IN does not.
+      ? `#${row.number} depends on #${row.dep}, but the list of shared files is NOT knowable (the files data is missing — GitHub limits it on large PRs). We report the dependency fail-closed.`
+      : `#${row.number} shares with #${row.dep}: ${head.join(', ')}${more > 0 ? ` (+${more} more)` : ''}`,
   }
 }
 
 /**
- * `tuipr conflict <PR> --json` → diagnózis-objektum.
+ * `tuipr conflict <PR> --json` → diagnosis object.
  *
- * A TUI NEM implementálja újra a merge-tree mérést: a subcommandot hívja. Ez
- * ugyanaz az elv, amiért a queue-modellt sem számoljuk itt újra — a duplikált
- * döntési lánc szülte azt az elcsúszást, amit a (b) csomag megszüntetett.
+ * The TUI does NOT reimplement the merge-tree measurement: it calls the
+ * subcommand. This is the same principle by which we also don't recompute
+ * the queue model here — the duplicated decision chain is what produced the
+ * drift that package (b) eliminated.
  *
- * A hiba DOBÓDIK, nem nyeljük el: egy néma üres diagnózis a hívót arra
- * vezetné, hogy nincs conflict.
+ * The error IS THROWN, we don't swallow it: a silent empty diagnosis would
+ * lead the caller to believe there's no conflict.
  */
 export function fetchDiagnosis(pr) {
   const res = spawnSync('bash', [NEXT_SH, 'conflict', String(pr), '--json'], { encoding: 'utf8' })
   const spawnErr = spawnFailure(res, 'bash')
-  if (spawnErr) throw new Error(`a #${pr} diagnózisa nem kérhető le: ${spawnErr}`)
+  if (spawnErr) throw new Error(`could not fetch the diagnosis for #${pr}: ${spawnErr}`)
   if (res.status !== 0) {
-    throw new Error(`conflict --json hiba (exit ${res.status}): ${(res.stderr || res.stdout || '').trim() || '(nincs kimenet)'}`)
+    throw new Error(`conflict --json error (exit ${res.status}): ${(res.stderr || res.stdout || '').trim() || '(no output)'}`)
   }
   return JSON.parse(res.stdout)
 }
 
-// --- Az 'i' (info) panel: gyors rész + PROGRESSZÍV, ABORTÁLHATÓ mérés -------
+// --- The 'i' (info) panel: fast part + PROGRESSIVE, ABORTABLE measurement --
 //
-// MIÉRT EGY BILLENTYŰ. Korábban két panel volt: 'i' = "miért dep?" (azonnali, a
-// queue-modellből) és 'c' = conflict-diagnózis (drága, `tuipr conflict`).
-// A felhasználó szempontjából viszont EGY kérdés van — "mi van ezzel a PR-ral,
-// és miért?" —, és neki kellett tudnia, melyik felét melyik gomb adja. A user
-// döntése: "csinálja a mérést, csak ne tartson percekig; ha progresszíven tudsz
-// megjeleníteni és abortálni is tudsz, azzal el is dőlt a kérdés."
+// WHY ONE KEY. There used to be two panels: 'i' = "why dep?" (instant, from
+// the queue model) and 'c' = conflict diagnosis (expensive, `tuipr
+// conflict`). From the user's point of view, though, there is ONE question —
+// "what's going on with this PR, and why?" — and they had to know which key
+// gives which half. The user's decision: "run the measurement, just don't
+// let it take minutes; if you can display it progressively and also abort
+// it, that settles the question."
 //
-// A KÖLTSÉG-ASZIMMETRIA nem tűnik el, csak nem a felhasználóra tolódik: a gyors
-// rész AZONNAL kirendereldik (nulla várakozás), a drága rész pedig háttérben
-// tölt be, élő status-sorral, Esc-cel megszakíthatóan. A 'd'/'r' (ingyen vs.
-// token) aszimmetria ezzel szemben MEGMARAD két billentyűnek: ott a drága út
-// KÜLSŐ hatással jár (tokent költ), tehát megerősítés-köteles. A mérés
-// read-only és lokális — nincs mit megerősíteni, csak megszakítani.
+// THE COST ASYMMETRY doesn't disappear, it's just not pushed onto the user:
+// the fast part renders IMMEDIATELY (zero wait), while the expensive part
+// loads in the background, with a live status line, abortable with Esc. The
+// 'd'/'r' (free vs. token) asymmetry, by contrast, REMAINS two keys: there
+// the expensive path has an EXTERNAL effect (spends tokens), so it requires
+// confirmation. The measurement is read-only and local — there's nothing to
+// confirm, only to abort.
 
 /**
- * Egy `--progress` NDJSON sor esemény-objektummá.
+ * One `--progress` NDJSON line into an event object.
  *
- * FAIL-CLOSED, két ponton:
- *   - a nem-JSON sor DOBÓDIK, nem skipeljük. A néma skip azt a képet adná, hogy
- *     a mérés halad, holott a mérő már összefüggéstelen kimenetet ad (pl. egy
- *     jövőbeli formátumváltás után) — a status-sor örökre "3/7"-en állna.
- *   - a `pr` mező KÖTELEZŐ. Erre épül a stale-eldobás: PR-szám nélkül az
- *     eseményt nem tudjuk sorhoz kötni, tehát a race-védelem elveszne, és egy
- *     másik PR mérése átcsúszhatna a kijelölt sorra.
+ * FAIL-CLOSED, at two points:
+ *   - a non-JSON line IS THROWN, we don't skip it. A silent skip would give
+ *     the impression that the measurement is progressing, when in fact the
+ *     measurer is already producing incoherent output (e.g. after a future
+ *     format change) — the status line would sit at "3/7" forever.
+ *   - the `pr` field is MANDATORY. Stale-dropping is built on this: without
+ *     a PR number we cannot tie the event to a row, so the race protection
+ *     would be lost, and another PR's measurement could slip through onto
+ *     the selected row.
  */
 export function parseProgressEvent(line) {
   let ev
   try {
     ev = JSON.parse(line)
   } catch (error) {
-    throw new Error(`a progress-esemény nem parse-olható JSON-ként: ${error.message} — nyers sor: ${line}`)
+    throw new Error(`the progress event cannot be parsed as JSON: ${error.message} — raw line: ${line}`)
   }
   if (ev === null || typeof ev !== 'object' || Array.isArray(ev)) {
-    throw new Error(`a progress-esemény nem objektum: ${line}`)
+    throw new Error(`the progress event is not an object: ${line}`)
   }
   if (typeof ev.event !== 'string' || ev.event === '') {
-    throw new Error(`a progress-eseményből hiányzik az \`event\` kulcs: ${line}`)
+    throw new Error(`the progress event is missing the \`event\` key: ${line}`)
   }
   if (typeof ev.pr !== 'number' || !Number.isFinite(ev.pr)) {
-    throw new Error(`a progress-eseményből hiányzik a \`pr\` szám: ${line} — enélkül nem köthető a kijelölt sorhoz (race-védelem)`)
+    throw new Error(`the progress event is missing the \`pr\` number: ${line} — without it, it cannot be tied to the selected row (race protection)`)
   }
   return ev
 }
 
-/** A mérés-állapot kezdete EGY PR-ra. A `pr` a stale-eldobás horgonya. */
+/** The start of measurement state for ONE PR. The `pr` is the stale-drop anchor. */
 export function progressInit(pr) {
   return { pr, running: true, done: 0, total: 0, diag: null, aborted: false, error: null }
 }
 
 /**
- * Egy esemény alkalmazása a mérés-állapotra. TISZTA: új objektumot ad.
+ * Applying an event to the measurement state. PURE: returns a new object.
  *
- * KÉT ELDOBÁSI SZABÁLY, mindkettő valódi hibaosztályt zár ki:
- *   1) STALE PR: az `ev.pr !== st.pr` eseményt eldobjuk. Élő race: a #911 mérése
- *      fut, a user a #905-re navigál, ott is indul mérés, és a #905 eredménye
- *      ELŐBB érkezik — a #911 paneljébe a #905 conflictjai kerülnének.
- *   2) ABORT UTÁN: az abortált mérésbe késve befutó `result` sem íródik be. A
- *      child kill-je ASZINKRON (a már kiírt sor a pipe-ban ülhet), tehát a
- *      "megszakítva 3/7"-et felülírhatná egy teljes diagnózis — a user mért
- *      tényként olvasná azt, amit épp megszakított.
+ * TWO DROP RULES, each closing off a real error class:
+ *   1) STALE PR: we drop the event where `ev.pr !== st.pr`. A live race: the
+ *      #911 measurement is running, the user navigates to #905, a
+ *      measurement starts there too, and #905's result arrives FIRST — #905's
+ *      conflicts would end up in #911's panel.
+ *   2) AFTER ABORT: a `result` that arrives late into an aborted measurement
+ *      is also not written in. The child's kill is ASYNCHRONOUS (an
+ *      already-written line can be sitting in the pipe), so a complete
+ *      diagnosis could overwrite "aborted at 3/7" — the user would read as a
+ *      measured fact what they just aborted.
  */
 export function progressReducer(st, ev) {
   if (ev.pr !== st.pr) return st
@@ -443,84 +485,92 @@ export function progressReducer(st, ev) {
         total: typeof ev.total === 'number' ? ev.total : st.total,
       }
     case 'result':
-      // A `diagnosis` HIÁNYA nem "üres diagnózis": az a mérő szerződés-szegése.
-      // Némán null diagnózist beírni azt a képet adná, hogy nincs conflict.
+      // The ABSENCE of `diagnosis` is not an "empty diagnosis": that is the
+      // measurer breaching the contract. Silently writing in a null
+      // diagnosis would give the impression that there's no conflict.
       if (ev.diagnosis === null || typeof ev.diagnosis !== 'object') {
-        return { ...st, running: false, error: 'a mérő `result` eseménye diagnózis nélkül jött — a kimeneti szerződés megsérült' }
+        return { ...st, running: false, error: 'the `result` event from the measurer arrived without a diagnosis — the output contract was violated' }
       }
       return { ...st, running: false, diag: ev.diagnosis }
     case 'error':
-      // HIBÁBÓL SOSEM LESZ DIAGNÓZIS: a diag marad null, és a hiba látszik.
-      return { ...st, running: false, diag: null, error: String(ev.message ?? 'ismeretlen mérési hiba') }
+      // AN ERROR NEVER TURNS INTO A DIAGNOSIS: diag stays null, and the
+      // error shows.
+      return { ...st, running: false, diag: null, error: String(ev.message ?? 'unknown measurement error') }
     default:
-      // Ismeretlen esemény-típus: NEM dobunk (egy újabb mérő-verzió adhat plusz
-      // eseményt), de nem is értelmezzük — az állapot változatlan.
+      // Unknown event type: we do NOT throw (a newer measurer version may
+      // add an extra event), but we also don't interpret it — the state is
+      // unchanged.
       return st
   }
 }
 
-/** A mérés megszakítása. A RÉSZeredmény (done/total) megmarad — lásd progressLabel. */
+/** Aborting the measurement. The PARTIAL result (done/total) is kept — see progressLabel. */
 export function progressAbort(st) {
   if (!st.running) return st
   return { ...st, running: false, aborted: true }
 }
 
 /**
- * Egy mérés-esemény alkalmazása az INFO-PANEL state-jére — a PANEL-SZINTŰ
- * stale-védelem. TISZTA: stale eseményre a KAPOTT state-et adja vissza
- * (referencia-azonos), így a React setState no-op marad.
+ * Applying a measurement event to the INFO PANEL state — the PANEL-LEVEL
+ * stale protection. PURE: for a stale event it returns the RECEIVED state
+ * (reference-identical), so the React setState stays a no-op.
  *
- * MIÉRT KELL a progressReducer MELLETT: a reducer az `ev.pr !== st.pr`-t zárja
- * ki, azaz hogy egy mérésbe MÁS PR eseménye kerüljön. Az itteni ellenőrzés más
- * hibaosztály: a user közben MÁS sorra nyitott panelt (j/k), a régi mérés
- * callbackje pedig az ÚJ panel state-jébe írna. A `pr` a mérés indításakori
- * sor-szám; ha az már nem a panel sora, az esemény eldobandó — különben a user
- * egy MÁS PR mért conflict-tényét (vagy mérési hibáját) olvasná a friss
- * panelben.
+ * WHY THIS IS NEEDED ALONGSIDE progressReducer: the reducer closes off
+ * `ev.pr !== st.pr`, i.e. another PR's event landing in a measurement. The
+ * check here is a different error class: the user opened a panel on a
+ * DIFFERENT row in the meantime (j/k), and the old measurement's callback
+ * would write into the NEW panel's state. The `pr` is the row number at the
+ * time the measurement was started; if that's no longer the panel's row, the
+ * event is to be dropped — otherwise the user would read another PR's
+ * measured conflict fact (or measurement error) in the fresh panel.
  *
- * A `null` info (közben zárt panel) és a `progress: null` (nem-mérhető, stacked
- * sor) szintén változatlanul megy vissza: zárt/nem-mérő panel nem éled újra.
+ * `null` info (panel closed in the meantime) and `progress: null`
+ * (non-measurable, stacked row) also go back unchanged: a closed/non-
+ * measuring panel doesn't come back to life.
  */
 export function applyProgressToInfo(cur, pr, ev) {
   if (!cur || cur.row.number !== pr || !cur.progress) return cur
   return { ...cur, progress: progressReducer(cur.progress, ev) }
 }
 
-/** A status-sor a mérés-állapotból. MÉRT számokat mond, nem becsül. */
+/** The status line from the measurement state. States MEASURED numbers, doesn't estimate. */
 export function progressLabel(st) {
   if (!st) return ''
-  if (st.error) return `mérési hiba: ${st.error}`
+  if (st.error) return `measurement error: ${st.error}`
   if (st.aborted) {
-    // A NEVEZŐT csak akkor írjuk ki, ha MÉRTÜK (megjött a `start` esemény).
-    // Előtte a "0/0 jelöltnél" mért ténynek olvasható ("nulla jelölt volt"),
-    // holott a jelölt-számot még nem tudtuk — élő renderben ezt kimértük egy
-    // 80 ms-nál abortált mérésen.
+    // We only print the DENOMINATOR if we MEASURED it (the `start` event
+    // arrived). Before that "at 0/0 candidates" would read as a measured
+    // fact ("there were zero candidates"), when in fact we didn't know the
+    // candidate count yet — measured live on a measurement aborted at 80 ms.
     return st.total > 0
-      ? `mérés megszakítva ${st.done}/${st.total} jelöltnél`
-      : 'mérés megszakítva (még a jelölt-lista előtt)'
+      ? `measurement aborted at ${st.done}/${st.total} candidates`
+      : 'measurement aborted (before the candidate list)'
   }
   if (st.running) {
-    // A total 0 addig, amíg a `start` esemény meg nem jött — ilyenkor a nevezőt
-    // NEM találgatjuk ("3/?"), mert egy hamis nevező hamis haladást sugall.
-    return st.total > 0 ? `mérés: ${st.done}/${st.total} jelölt…` : 'mérés indul…'
+    // total is 0 until the `start` event has arrived — in that case we do
+    // NOT guess the denominator ("3/?"), because a false denominator
+    // suggests false progress.
+    return st.total > 0 ? `measuring: ${st.done}/${st.total} candidates…` : 'measurement starting…'
   }
-  if (st.diag) return `mérés kész (${st.diag.probed ?? st.done} jelölt megmérve)`
+  if (st.diag) return `measurement done (${st.diag.probed ?? st.done} candidates measured)`
   return ''
 }
 
 /**
- * Az info-panel modellje: a GYORS rész (azonnal) + a LASSÚ rész (progresszív).
+ * The info panel's model: the FAST part (instant) + the SLOW part
+ * (progressive).
  *
- * A kettéosztás a KÖLTSÉG szerint van, nem téma szerint: minden, ami a
- * queue-modellben MÁR OTT VAN (dep-metszet, mergeMethod, landolás-blokkolók,
- * stacked-info) a `fast`-ba kerül és nulla várakozással renderelődik; ami MÉRÉST
- * igényel (merge-tree próbák), az a `slow`-ba, és csak akkor jelenik meg, ha
- * megérkezett. A `slow.state` teszi ezt gépileg olvashatóvá:
+ * The split is by COST, not by topic: everything that is ALREADY THERE in
+ * the queue model (dep intersection, mergeMethod, landing blockers,
+ * stacked-info) goes into `fast` and renders with zero wait; whatever
+ * requires MEASUREMENT (merge-tree probes) goes into `slow`, and only
+ * appears once it has arrived. `slow.state` makes this machine-readable:
  *   idle | measuring | done | aborted | error
  *
- * A `measurable` azt mondja meg, van-e egyáltalán mit mérni. A STACKED sor nem
- * mérhető: a sorsa a talapzatán dől el, és a hozzá mért próba a talapzat
- * conflictjait mutatná a sajátjaként (ezt a bash oldal is külön ágon zárja ki).
+ * `measurable` says whether there is anything to measure at all. A STACKED
+ * row is not measurable: its fate is decided by its base, and a probe
+ * measured against it would show the base's conflicts as its own (the bash
+ * side also excludes this on a separate branch).
  */
 export function buildInfoModel({ row, progress = null }) {
   const dep = depExplanation(row)
@@ -529,20 +579,22 @@ export function buildInfoModel({ row, progress = null }) {
     dep,
     state: row.state,
     mergeMethod: row.mergeMethod ?? null,
-    // A BRANCH-NÉV a modellből, NYERSEN. A csonkolás a nézeté (ott ismert a
-    // keret belső szélessége), de a névnek a MODELLBŐL kell jönnie, hogy a
-    // render ne a soron tapogasson — a `headRefName` a metódus forrása, tehát
-    // ugyanabból a rekordból kell származnia, mint a `mergeMethod`, különben a
-    // kettő elcsúszhatna (pl. egy részleges frissítésnél).
+    // The BRANCH NAME from the model, RAW. Truncation belongs to the view
+    // (that's where the frame's inner width is known), but the name must
+    // come from the MODEL so the render doesn't grope at the row —
+    // `headRefName` is the method's source, so it must come from the same
+    // record as `mergeMethod`, otherwise the two could drift apart (e.g. on
+    // a partial refresh).
     headRefName: typeof row.headRefName === 'string' ? row.headRefName : '',
     stackedOn: stacked ? row.stackedOn : null,
-    // A landolás-blokkolók ugyanabból a tiszta függvényből jönnek, amit a merge
-    // megerősítő ekrány használ — egy szabály, két megjelenítés.
+    // The landing blockers come from the same pure function the merge
+    // confirmation screen uses — one rule, two displays.
     landableBlockers: canMergeRow(row) ? [] : mergeBlockers(row),
-    // A PROVIDER JELZÉSE, ÁTVEZETVE: a `classification` csak a MÉRŐ providerben
-    // létezik (a gh/git provider szándékosan nem tölti). A nézet ezen dönti el,
-    // hogy megjelenítheti-e az integrációs branch rebuild-állapotát — enélkül
-    // a MÉRT és a KÖVETKEZTETETT tudás mosódna össze.
+    // THE PROVIDER SIGNAL, PASSED THROUGH: `classification` only exists in
+    // the MEASURING provider (the gh/git provider deliberately doesn't
+    // populate it). The view uses this to decide whether it can display the
+    // integration branch's rebuild state — without it, MEASURED and INFERRED
+    // knowledge would blur together.
     classification: row.classification ?? null,
   }
   const measurable = !stacked
@@ -551,16 +603,17 @@ export function buildInfoModel({ row, progress = null }) {
     if (progress.error) {
       slow = { state: 'error', diag: null, advice: null, label: progressLabel(progress), error: progress.error }
     } else if (progress.aborted) {
-      // ABORTÁLT MÉRÉSBŐL NEM ÁLLÍTUNK CONFLICT-TÉNYT: a diag null marad, csak
-      // a részeredmény ("3/7") látszik. A félbehagyott próba-sorozat nem
-      // bizonyít se conflictot, se annak hiányát.
+      // WE DO NOT STATE A CONFLICT FACT FROM AN ABORTED MEASUREMENT: diag
+      // stays null, only the partial result ("3/7") shows. An interrupted
+      // series of probes proves neither a conflict nor its absence.
       slow = { state: 'aborted', diag: null, advice: null, label: progressLabel(progress), error: null }
     } else if (progress.diag) {
       slow = {
         state: 'done',
         diag: progress.diag,
-        // Az ajánlás a MÉRT diagnózisból LEVEZETETT — ugyanaz a tiszta függvény,
-        // amit a régi 'c' panel használt. A mérés-út változott, a döntés nem.
+        // The recommendation is DERIVED from the MEASURED diagnosis — the
+        // same pure function the old 'c' panel used. The measurement path
+        // changed, the decision did not.
         advice: conflictAdvice(progress.diag),
         label: progressLabel(progress),
         error: null,
@@ -573,35 +626,40 @@ export function buildInfoModel({ row, progress = null }) {
 }
 
 /**
- * A mérés elindítása STREAMKÉNT: `tuipr conflict <PR> --progress`.
+ * Launching the measurement AS A STREAM: `tuipr conflict <PR> --progress`.
  *
- * MIÉRT spawn (aszinkron) és nem spawnSync: a spawnSync a mérés teljes idejére
- * MEGFAGYASZTJA az Ink render-loopját — se navigálni, se kilépni nem lehetne, és
- * épp ez volt a régi 'c' panel baja (a #911-en 7 jelölt, másodpercek). Az
- * aszinkron út mellett a UI végig használható marad.
+ * WHY spawn (async) and not spawnSync: spawnSync FREEZES Ink's render loop
+ * for the entire duration of the measurement — you could neither navigate
+ * nor quit, and this was exactly the old 'c' panel's problem (7 candidates
+ * on #911, seconds). With the async path the UI stays usable throughout.
  *
- * A `spawn` INJEKTÁLHATÓ (opts.spawn): így a stream-kezelés — a soronkénti
- * pufferelés, a kill, az exit- és ENOENT-ág — unit-tesztelhető valódi
- * gyerekfolyamat nélkül.
+ * `spawn` is INJECTABLE (opts.spawn): this makes the stream handling — the
+ * line-by-line buffering, the kill, the exit and ENOENT branches —
+ * unit-testable without a real child process.
  *
- * A HIBAÁGAK KÜLÖNVÁLNAK, mert más diagnózist érdemelnek:
- *   - nem-nulla exit `result` NÉLKÜL → a mérő elesett (a stderr-t átadjuk),
- *   - `error` esemény ENOENT-tel → a bash/script maga nem található. Ezt a
- *     `res.error?.code`-dal kell szétválasztani; exit-kódként "null"-nak
- *     látszana, és hamis "a mérés üresen tért vissza" diagnózist adna.
+ * THE ERROR BRANCHES ARE SEPARATE, because they deserve different
+ * diagnoses:
+ *   - non-zero exit WITHOUT `result` → the measurer crashed (we pass through
+ *     stderr),
+ *   - `error` event with ENOENT → the bash/script itself is not found. This
+ *     must be distinguished via `res.error?.code`; as an exit code it would
+ *     look like "null", and would give a false "the measurement returned
+ *     empty" diagnosis.
  *
- * AZ ABORT UTÁN NINCS TÖBB ESEMÉNY (mért race, BLOCKER volt): a `child.kill()`
- * ASZINKRON, és a Node a stdout `data` eseményt a kill UTÁN is kiadja a pipe-ban
- * MÁR BENNE LÉVŐ bájtokra (0/5/20/100 ms késleltetésnél mérve mind). Így a
- * félbehagyott próba-sorozat `result`-ja MÉGIS megjött, és aki nem szűrte, mért
- * ténynek vette: a lista `✓` KÉSZ-jelzőt adott egy le sem mért PR-ra, és az `i`
- * újranyitása a cache-ből szolgálta ki a "nincs conflict" képet.
+ * NO MORE EVENTS AFTER ABORT (a measured race, it WAS A BLOCKER):
+ * `child.kill()` is ASYNCHRONOUS, and Node emits the stdout `data` event even
+ * AFTER the kill for bytes ALREADY SITTING in the pipe (measured at 0/5/20/100
+ * ms delay, all of them). So the interrupted probe series' `result` arrived
+ * ANYWAY, and whoever didn't filter it took it as a measured fact: the list
+ * gave a `✓` DONE marker to a PR that was never even measured, and reopening
+ * `i` served the "no conflict" picture from the cache.
  *
- * A GUARD EZÉRT ITT VAN, A FORRÁSNÁL, nem a fogyasztóknál: a panel-oldal
- * (`progressReducer`: `if (st.aborted) return st`) eddig is védett volt, a
- * cache-írás NEM — ugyanarról a mérésről a két réteg MÁST állított. Egy
- * forrás-oldali elnyomással minden fogyasztó egyszerre javul, és nem kell minden
- * új hívási helyen megismételni a szűrést (a hiányzó ismétlés volt a bug).
+ * THIS IS WHY THE GUARD IS HERE, AT THE SOURCE, not with the consumers: the
+ * panel side (`progressReducer`: `if (st.aborted) return st`) was already
+ * protected, the cache write WAS NOT — the two layers stated DIFFERENT
+ * things about the same measurement. With a source-side suppression every
+ * consumer improves at once, and the filtering doesn't need to be repeated
+ * at every new call site (the missing repetition was the bug).
  */
 export function startProgressDiagnosis(pr, { onEvent, onExit, spawn: spawnImpl = spawn } = {}) {
   const child = spawnImpl('bash', [NEXT_SH, 'conflict', String(pr), '--progress'], {
@@ -621,13 +679,15 @@ export function startProgressDiagnosis(pr, { onEvent, onExit, spawn: spawnImpl =
 
   child.stdout?.setEncoding('utf8')
   child.stdout?.on('data', (chunk) => {
-    // ABORT UTÁN NÉMA: a megszakított mérés kimenete nem tény. A puffert sem
-    // növeljük tovább — a félbehagyott stream maradékát nincs kinek átadni.
+    // SILENT AFTER ABORT: the output of an aborted measurement is not a
+    // fact. We also stop growing the buffer — there's no one to hand the
+    // remainder of the interrupted stream to.
     if (aborted) return
     buf += chunk
-    // SORONKÉNTI parse: a fél sor NEM parse-olható (JSON-hiba lenne), tehát a
-    // maradékot a pufferben tartjuk a következő chunkig. A pipe chunk-határa
-    // bárhol lehet — élőben a `result` (nagy objektum) rendszeresen kettévágódik.
+    // LINE-BY-LINE parse: a half line is NOT parseable (would be a JSON
+    // error), so we keep the remainder in the buffer until the next chunk.
+    // The pipe's chunk boundary can be anywhere — live, the `result` (a
+    // large object) regularly gets cut in two.
     let nl
     while ((nl = buf.indexOf('\n')) !== -1) {
       const line = buf.slice(0, nl).trim()
@@ -637,8 +697,9 @@ export function startProgressDiagnosis(pr, { onEvent, onExit, spawn: spawnImpl =
       try {
         ev = parseProgressEvent(line)
       } catch (error) {
-        // A parse-hiba HANGOS: a stream szerződése sérült, tehát a mérés
-        // eredménye nem tudható. Némán skipelve a status-sor örökre állna.
+        // A parse error is LOUD: the stream's contract was violated, so the
+        // measurement's result is not knowable. Skipping it silently would
+        // leave the status line stuck forever.
         finish({ error: error.message })
         child.kill?.()
         return
@@ -651,32 +712,33 @@ export function startProgressDiagnosis(pr, { onEvent, onExit, spawn: spawnImpl =
   child.stderr?.on('data', (chunk) => { stderr += chunk })
 
   child.on('error', (error) => {
-    // ENOENT külön: a "bash nem található" NEM ugyanaz, mint egy elhasalt mérés.
+    // ENOENT separate: "bash not found" is NOT the same as a crashed
+    // measurement.
     finish({
       error: error?.code === 'ENOENT'
-        ? `a mérő nem indítható (ENOENT): a bash vagy a ${NEXT_SH} nem található`
-        : `a mérő nem indítható: ${error?.message ?? String(error)}`,
+        ? `the measurer cannot be started (ENOENT): bash or ${NEXT_SH} was not found`
+        : `the measurer cannot be started: ${error?.message ?? String(error)}`,
     })
   })
   child.on('close', (code) => {
     if (aborted) { finish({ aborted: true }); return }
     if (code === 0 && sawResult) { finish({ ok: true }); return }
-    // NEM-NULLA exit VAGY result nélküli 0: mindkettő hiba. A "0 exit, de nincs
-    // result" azért is az, mert a hívó ilyenkor üres panelt kapna, és
-    // "nincs conflict"-ként olvasná.
+    // NON-ZERO exit OR a 0 without a result: both are errors. "exit 0, but
+    // no result" is one too, because the caller would otherwise get an empty
+    // panel and read it as "no conflict".
     finish({
       error: code === 0
-        ? 'a mérő 0-val tért vissza, de nem adott `result` eseményt — a kimenet csonka'
-        : `a mérő elesett (exit ${code}): ${stderr.trim() || 'nincs stderr'}`,
+        ? 'the measurer returned 0, but did not give a `result` event — the output is truncated'
+        : `the measurer crashed (exit ${code}): ${stderr.trim() || 'no stderr'}`,
     })
   })
 
   return {
     /**
-     * Megszakítás: a childot KILL-eljük, hogy ne maradjon zombie merge-tree
-     * próba a háttérben. A már beérkezett részeredményt a hívó
-     * progressAbort-tal jelöli — az ide késve befutó `result`-ot a reducer
-     * eldobja (lásd az abort-szabályt ott).
+     * Aborting: we KILL the child so no zombie merge-tree probe is left
+     * running in the background. The caller marks the partial result already
+     * received with progressAbort — a `result` arriving late here is dropped
+     * by the reducer (see the abort rule there).
      */
     abort() {
       aborted = true

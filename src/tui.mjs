@@ -1,29 +1,31 @@
 #!/usr/bin/env node
 
-// tui — az Ink alapú review-munkaállomás BELÉPÉSI PONTJA.
+// tui — the ENTRY POINT of the Ink-based review workstation.
 //
-// Ez a fájl szándékosan vékony: a logika a core-ban (tui-core.mjs), a
-// React/Ink réteg az app-ban (tui-app.mjs) él. Az egyetlen dolga, hogy
-// entryként elindítsa a TUI-t, és — visszafelé kompatibilitásból — továbbadja a
-// core publikus felületét (a bin/tuipr.sh és a test/next-tui-*.test.ts
-// fájlok ezt a fájlt hivatkozzák).
+// This file is deliberately thin: the logic lives in the core (tui-core.mjs),
+// the React/Ink layer lives in the app (tui-app.mjs). Its only job is to
+// start the TUI when run as the entry, and — for backward compatibility — to
+// pass through the core's public surface (bin/tuipr.sh and the
+// test/next-tui-*.test.ts files reference this file).
 //
-// MIÉRT NEM lakhat itt a logika: ha az app.mjs visszaimportál a belépési pontra,
-// az KÖRKÖRÖS ESM-import. Entryként futtatva a ciklus nem tud bezáródni (a modul
-// még kiértékelés alatt van, amikor az app visszaimportál rá), így a lenti
-// dinamikus import top-level await-je sosem settle-el: a node exit 13-cal, ÜRES
-// kimenettel hal meg. Élesben ez azt jelentette, hogy a TTY-s `tuipr queue`
-// néma no-op volt (az `exec` még a 13-as exitet is elfedte 0-ra), és a runTui()
-// defenzív TTY-checkje sem futott le. A függőségi irány ezért SZIGORÚAN
-// egyirányú: az entry és az app is CSAK a core-ból importál, a core viszont
-// egyikükből sem.
+// WHY THE LOGIC CANNOT LIVE HERE: if app.mjs imports back into the entry
+// point, that's a CIRCULAR ESM import. Run as the entry, the cycle can never
+// close (the module is still being evaluated when the app imports back into
+// it), so the dynamic import's top-level await below never settles: node
+// dies with exit 13 and EMPTY output. In production this meant the TTY
+// `tuipr queue` was a silent no-op (`exec` even masked the exit 13 down to
+// 0), and runTui()'s defensive TTY check never ran either. The dependency
+// direction is therefore STRICTLY one-way: both the entry and the app import
+// ONLY from the core, and the core imports from neither of them.
 //
-// HIBAKEZELÉSI SZERZŐDÉS (a néma exit osztálya ki van irtva):
-//   - a TUI el sem indul, mert az ink nem resolválható → érthető magyarázat +
-//     telepítési utasítás a stderr-re, exit EXIT_TUI_UNAVAILABLE (3), amire a
-//     bin/tuipr.sh a lista-nézetre esik át;
-//   - bármi MÁS hiba → hangosan, teljes stack trace-szel dobódik (nem nyeljük el);
-//   - nincs olyan ág, ami 0 bájt kimenettel, exit 0-val visszatérne.
+// ERROR-HANDLING CONTRACT (the silent-exit bug class is eradicated):
+//   - the TUI fails to even start because ink isn't resolvable → a clear
+//     explanation + install instructions to stderr, exit
+//     EXIT_TUI_UNAVAILABLE (3), which bin/tuipr.sh falls back to the list
+//     view on;
+//   - any OTHER error → thrown loudly, with a full stack trace (never
+//     swallowed);
+//   - no branch returns with 0 bytes of output and exit 0.
 
 import { spawnSync } from 'node:child_process'
 import { existsSync, realpathSync } from 'node:fs'
@@ -44,7 +46,7 @@ export {
   AI_REVIEW_DISALLOWED_TOOLS_ARGS,
   AI_REVIEW_SETTING_SOURCES,
   AI_REVIEW_SETTING_SOURCES_ARGS,
-  // A modell-választás (5b): mindig explicit --model, default opus, TUI-váltó.
+  // Model selection (5b): always explicit --model, default opus, TUI toggle.
   AI_REVIEW_DEFAULT_MODEL,
   AI_REVIEW_MODELS,
   aiReviewModelState,
@@ -104,15 +106,17 @@ export {
   makeStuckViewWatchdog,
   openReviewView,
   fetchRepoRoot,
-  // (wf24/4) A memoizált gyökér teszt-horgonya (a fixtúrák közti szivárgás ellen).
+  // (wf24/4) The memoized root's test anchor (against leakage between
+  // fixtures).
   resetRepoRootCache,
-  // (dev-trunk átállás) A trunk-név EGY forrásból (env → package.json tuipr.trunk
-  // → 'main') + a memoizálás teszt-horgonya. A bash oldal (tuipr.sh MAIN=)
-  // ugyanezt a rangsort követi.
+  // (dev-trunk switch) The trunk name from ONE source (env → package.json
+  // tuipr.trunk → 'main') + the memoization test anchor. The bash side
+  // (tuipr.sh MAIN=) follows the same precedence.
   trunkBranch,
   resetTrunkBranchCache,
-  // (1a) A BETÖLTÖTT CORE azonosítója a fejléchez + a memoizálás teszt-horgonya.
-  // A user mért költsége: ma többször nem tudta megállapítani, melyik kód fut.
+  // (1a) The LOADED CORE's identifier for the header + the memoization test
+  // anchor. The user's measured cost: today they repeatedly couldn't tell
+  // which code was running.
   fetchCoreSha,
   resetCoreShaCache,
   probeHunkSession,
@@ -123,8 +127,8 @@ export {
   hunkLiveSessionId,
   aiReviewGateByIds,
   startAgentReview,
-  // A HÁTTÉR-REVIEW LÁTHATÓSÁGA (#904): eltelt-idő formázó, progressz-jelzés,
-  // a HÉT végállapot és a `stream-json` sor-olvasó.
+  // BACKGROUND-REVIEW VISIBILITY (#904): elapsed-time formatter, progress
+  // indicator, the SEVEN end states and the `stream-json` line reader.
   AI_REVIEW_LONG_MS,
   AI_REVIEW_P90_MS,
   AI_REVIEW_TIMEOUT_MS,
@@ -139,8 +143,9 @@ export {
   noActiveSessionMessage,
   clampCells,
   listLayout,
-  // (1b) A LÉPCSŐS stacked-jelölés behúzás-prefixe — a renderelő és a
-  // title-büdzsé KÖZÖS forrása (két számítás ugyanarra a mértékre elcsúszik).
+  // (1b) The STEPPED stacked-marker indent prefix — the SHARED source for
+  // the renderer and the title budget (two calculations on the same measure
+  // drift apart).
   stackIndent,
   STACK_MARK,
   overlayFrame,
@@ -176,8 +181,8 @@ export {
   mergeBlockers,
   mergeWarnings,
   mergePlan,
-  // A PANEL-réteg (dialógus-konszolidáció): egy PR-panel, inline info + modál
-  // megerősítés, viewport-korlát, friction-szöveg és az attesztációs body.
+  // The PANEL layer (dialog consolidation): one PR panel, inline info + modal
+  // confirmation, viewport limit, friction text and the attestation body.
   applyProgressToPanel,
   approveBody,
   clipBodyLines,
@@ -196,10 +201,12 @@ export {
   panelViewport,
   PANEL_MIN_LIST_ROWS,
   injectHunkComments,
-  // A HIBRID FINDINGS réteg (dupla könyvelés): a válasz-JSON parse-olása, a
-  // PR-ra kulcsolt findings-cache és a hunkba batch-betöltés + a sor-spinner.
+  // The HYBRID FINDINGS layer (double bookkeeping): parsing the response
+  // JSON, the PR-keyed findings cache, and batch-loading into the hunk + the
+  // row spinner.
   AI_PANEL_FINDINGS_SHOWN,
-  // (wf24/2) Az AI-összegző panel-sorkorlátja — a render és a teszt EGY forrásból.
+  // (wf24/2) The AI-summary panel row limit — render and test from ONE
+  // source.
   AI_PANEL_SUMMARY_LINES,
   aiReviewPanelLines,
   answerFindingsNeedApply,
@@ -208,10 +215,11 @@ export {
   cacheAiFindings,
   cacheMarkAiFindingsLoaded,
   cacheStoreAiFindings,
-  // Az `r` életciklus-kulcs + a dupla-`x` elvetés (a user 4. élő tesztje).
+  // The `r` lifecycle key + the double-`x` discard (the user's 4th live
+  // test).
   aiReviewLifecycle,
   cacheDiscardAiFindings,
-  // A kilépés-guard bemenete (nema-veszteseg-1): betöltetlen findingos PR-ok.
+  // The exit-guard input (silent-loss-1): PRs with unloaded findings.
   cacheUnappliedAiFindingPrs,
   rKeyLabel,
   parseAnswerFindings,
@@ -224,9 +232,10 @@ export {
   runAiReview,
   reviewCommand,
   RMARKS,
-  // (2) A REVIEW-CASCADE-MENÜ: a bőbeszédű AI-review megerősítő MODÁL helyén egy
-  // HORIZONTÁLIS, két lépcsős alopció-menü a lábléc alatt. A dwell-kapu, a
-  // váltók újra-armolás-tilalma és a budget-szivárgás-tilalom VÁLTOZATLAN.
+  // (2) The REVIEW-CASCADE MENU: in place of the verbose AI-review
+  // confirmation MODAL, a HORIZONTAL, two-stage sub-option menu under the
+  // footer. The dwell gate, the re-arm ban on the toggles, and the
+  // budget-leak ban are UNCHANGED.
   REVIEW_MENU_STAGES,
   reviewMenuAdvance,
   reviewMenuBack,
@@ -236,9 +245,10 @@ export {
   reviewMenuStep,
   reviewMenuToggle,
   reviewMenuWarning,
-  // (1d) A REVIEW-EREDMÉNYEK DISZK-CACHE-E (/tmp) — a user kérése: "fárasztó
-  // mindig újraindítani". A memória-cache marad a render-úton; ez a réteg
-  // CSAK a kifizetett review-eredményt perzisztálja, horgonyhoz kötve.
+  // (1d) The DISK CACHE (/tmp) for review results — the user's request:
+  // "it's tiring to always restart". The memory cache stays on the render
+  // path; this layer ONLY persists the paid-for review result, keyed to an
+  // anchor.
   REVIEW_STORE_DIR_NAME,
   REVIEW_STORE_SCHEMA,
   reviewStoreAnchor,
@@ -250,71 +260,76 @@ export {
   reviewStoreRead,
   reviewStoreStateLoadable,
   reviewStoreWrite,
-  // (1d) A cache-gyökér teszt-horgonya. SZÁNDÉKOSAN nem a TMPDIR-en: a globális
-  // env átírása MÁS tesztek stub-könyvtárait terelte el (MÉRVE: 31 teszt bukott).
+  // (1d) The cache root's test anchor. DELIBERATELY not on TMPDIR: rewriting
+  // the global env diverted OTHER tests' stub directories (MEASURED: 31
+  // tests failed).
   setReviewStoreBase,
   titleBudget,
   toGithubComments,
   uploadFindings,
 } from './tui-core.mjs'
 
-// A "TUI nem elérhető" DEDIKÁLT exit-kódja. A hívó (bin/tuipr.sh) EBBŐL
-// tudja, hogy nem generikus hiba történt, hanem a TUI-mód nem futott le, tehát
-// át kell esni a lista-nézetre. Ezért nem 1: az 1 a TTY-guard és minden más
-// hibaág, arra nem szabad fallbackölni.
+// The DEDICATED exit code for "TUI unavailable". The caller (bin/tuipr.sh)
+// uses THIS to know that no generic error occurred, but that TUI mode simply
+// didn't run, so it should fall through to the list view. Not 1 for that
+// reason: 1 is the TTY guard and every other error branch, and those must
+// NOT fall back.
 export const EXIT_TUI_UNAVAILABLE = 3
 
-// Entryként futunk-e?
+// Are we running as the entry?
 //
-// FIGYELEM, EZ VOLT A NÉMA EXIT BUGJA: a naiv
+// WATCH OUT, THIS WAS THE SILENT-EXIT BUG: the naive
 //   import.meta.url === new URL(`file://${process.argv[1]}`).href
-// összehasonlítás a SYMLINKELT fogyasztói úton MINDIG false-ot ad, mert a
-// process.argv[1] a symlink-út (…/<repo>/node_modules/tuipr/bin/…),
-// az import.meta.url viszont a node ESM-loader által REALPATH-olt út
-// (…/packages/tuipr/bin/…). A mobile és a web a core-t symlinkkel
-// fogyasztja, tehát élesben SOSEM egyeztek: a TUI-blokk kimaradt, a modul csak
-// re-exportált, és a process 0 bájt kimenettel, exit 0-val visszatért. Nem
-// "elnyelt hiba" volt — egyszerűen nem futott le semmi.
+// comparison ALWAYS came out false on a SYMLINKED consumer path, because
+// process.argv[1] is the symlink path (…/<repo>/node_modules/tuipr/bin/…),
+// while import.meta.url is the path REALPATH-ed by node's ESM loader
+// (…/packages/tuipr/bin/…). Mobile and web consume the core through a
+// symlink, so in production the two NEVER matched: the TUI block was
+// skipped, the module only re-exported, and the process returned with 0
+// bytes of output and exit 0. It wasn't a "swallowed error" — simply nothing
+// ran at all.
 //
-// A javítás: a process.argv[1]-et is realpath-oljuk, hogy ugyanazon a normál-
-// formán hasonlítsunk, amit a loader használ. (A bash oldalon a SCRIPT_DIR
-// logikai pwd-t használ, ezért ott a symlink-út érvényes marad — a normalizálás
-// itt, a node oldalon a helye.)
+// The fix: we realpath process.argv[1] too, so we compare on the same
+// normal form the loader uses. (On the bash side, SCRIPT_DIR uses the
+// logical pwd, so the symlink path stays valid there — the normalization
+// belongs here, on the node side.)
 const isMain = (() => {
   const argv1 = process.argv[1]
   if (!argv1) return false
   try {
     return import.meta.url === pathToFileURL(realpathSync(argv1)).href
   } catch {
-    // Nem létező/olvashatatlan argv[1]: essünk vissza a naiv egyezésre, semmit
-    // nem veszítünk vele.
+    // Nonexistent/unreadable argv[1]: fall back to the naive comparison, we
+    // lose nothing by it.
     return import.meta.url === new URL(`file://${argv1}`).href
   }
 })()
 
-// A React/Ink rész csak akkor töltődik be, ha tényleg TUI-ként futunk — így a
-// unit-tesztek (amik csak a tiszta függvényeket importálják) nem igényelnek
-// telepített inket.
+// The React/Ink part only loads if we're actually running as the TUI — this
+// way the unit tests (which only import the pure functions) don't require
+// ink to be installed.
 //
-// MIÉRT FÜGGVÉNY, ÉS NEM CSAK EGY `if (isMain)` BLOKK: a telepített parancs
-// (`bin/tuipr.mjs`) nem EZ a fájl, tehát az `isMain` ott hamis lenne, és a TUI
-// néma no-opként térne vissza — pontosan az a hibaosztály, amit a fenti
-// realpath-javítás egyszer már kiirtott. A bin ezért a `main()`-t hívja, nem
-// az entry-heurisztikára bízza magát. Az `isMain`-ág megmarad, hogy a fájl
-// közvetlenül futtatva is működjön (fejlesztés, teszt).
+// WHY A FUNCTION, AND NOT JUST AN `if (isMain)` BLOCK: the installed command
+// (`bin/tuipr.mjs`) is NOT this file, so `isMain` would be false there, and
+// the TUI would return as a silent no-op — exactly the bug class the
+// realpath fix above already eradicated once. The bin therefore calls
+// `main()` directly, rather than relying on the entry heuristic. The
+// `isMain` branch stays so the file also works when run directly
+// (development, tests).
 export async function main() {
-  // Az app-modul útja env-ből felülírható — ez a teszt-fogantyú a "nem
-  // resolválható függőség" ág fedezésére (más célra ne használd).
+  // The app module's path can be overridden from env — this is the test
+  // handle for covering the "dependency not resolvable" branch (don't use it
+  // for anything else).
   const appModule = process.env.TUIPR_NEXT_TUI_APP || './tui-app.mjs'
 
-  // Ink-feloldás a pkl.sh mintájára (scripts/pkl.sh): a fogyasztó fájában nem
-  // biztos, hogy ott van az ink (pnpm hoisting, vendorolt telepítés), a core
-  // checkoutjában viszont igen. A NODE_PATH-hoz hozzáadjuk a core saját
-  // node_modules-át, hogy a bare import onnan is feloldódjon — a Node ezt a
-  // CommonJS-hez tervezte, de a `createRequire`-alapú resolve-ot az ESM-loader
-  // is tiszteletben tartja, ha a folyamat indulásakor be van állítva. Ezért:
-  // ha az itteni (core-beli) node_modules létezik ÉS a bare 'ink' nem oldható
-  // fel innen, akkor újraindítjuk magunkat a beállított NODE_PATH-tal.
+  // Ink resolution follows the pattern of pkl.sh (scripts/pkl.sh): the
+  // consumer's tree isn't guaranteed to have ink (pnpm hoisting, vendored
+  // installs), but the core's checkout does. We prepend the core's own
+  // node_modules to NODE_PATH so the bare import resolves from there too —
+  // Node designed this for CommonJS, but the ESM loader also honors the
+  // `createRequire`-based resolve if it's set at process start. Hence: if
+  // the node_modules here (in the core) exists AND the bare 'ink' can't be
+  // resolved from it, we respawn ourselves with NODE_PATH set.
   const coreNodeModules = new URL('../node_modules/', import.meta.url)
   const coreNmPath = fileURLToPath(coreNodeModules)
   if (!process.env.TUIPR_NEXT_TUI_NO_RESPAWN && existsSync(coreNmPath)) {
@@ -325,8 +340,8 @@ export async function main() {
       inkResolvable = false
     }
     if (!inkResolvable) {
-      // Egyetlen respawn (a guard-env megakadályozza a végtelen ciklust), a
-      // core node_modules-át a NODE_PATH elé fűzve.
+      // A single respawn (the guard env prevents an infinite loop), with the
+      // core's node_modules prepended to NODE_PATH.
       const nodePath = process.env.NODE_PATH ? `${coreNmPath}:${process.env.NODE_PATH}` : coreNmPath
       const res = spawnSync(process.execPath, [fileURLToPath(import.meta.url), ...process.argv.slice(2)], {
         stdio: 'inherit',
@@ -340,21 +355,22 @@ export async function main() {
   try {
     ;({ runTui } = await import(appModule))
   } catch (error) {
-    // CSAK a "nincs meg a modul/csomag" hibát kezeljük gracefully — minden más
-    // (szintaktikai hiba, futásidejű throw a modul törzsében) VALÓDI bug, azt
-    // hangosan, teljes stack trace-szel kell látni. Néma elnyelés nincs.
+    // We only handle the "module/package not found" error gracefully —
+    // anything else (a syntax error, a runtime throw in the module body) is
+    // a REAL bug, and must be seen loudly, with a full stack trace. No
+    // silent swallowing.
     if (error?.code !== 'ERR_MODULE_NOT_FOUND') throw error
     process.stderr.write(
-      'A review-TUI nem indítható: az `ink` (React-terminál) függőség nem resolválható.\n' +
+      'The review TUI cannot start: the `ink` (React terminal) dependency is not resolvable.\n' +
         `  (${error.message.split('\n')[0]})\n` +
         '\n' +
-        'Mit tegyél:\n' +
-        '  • fejlesztői gépen: futtass `pnpm install` (workspace root vagy az app package)\n' +
-        '    — az ink a tuipr *dependency*-je, tehát a fogyasztó install-ja is lehúzza.\n' +
-        '  • ha most nem tudsz installálni: a lista-nézet mindig működik:\n' +
-        '    `tuipr queue --list` (vagy `--json`).\n' +
+        'What to do:\n' +
+        '  • on a dev machine: run `pnpm install` (workspace root or the app package)\n' +
+        "    — ink is a *dependency* of tuipr, so the consumer's install pulls it too.\n" +
+        "  • if you can't install right now: the list view always works:\n" +
+        '    `tuipr queue --list` (or `--json`).\n' +
         '\n' +
-        'Addig a lista-nézetet adom.\n',
+        'Falling back to the list view for now.\n',
     )
     process.exitCode = EXIT_TUI_UNAVAILABLE
   }
@@ -365,20 +381,21 @@ export async function main() {
 if (isMain) await main()
 
 /**
- * DIAGNOSZTIKA — ESCAPE-SZEKVENCIA TRACE, opt-in, alapból NEM fut.
+ * DIAGNOSTICS — ESCAPE-SEQUENCE TRACE, opt-in, OFF by default.
  *
- * MIÉRT LÉTEZIK: a hunk↔TUI váltás villanásait három szereplő escape-írásai
- * együtt okozzák (az Ink `beginSuspend`/`endSuspend`-je, a mi kompenzációink, és a
- * hunk késett szekvenciái a `script` PTY-ról). A sorrendjükre TIPPELNI nem lehet —
- * három javítási kör bizonyította. Ez a tracer a MÉRÉS: időbélyeggel naplózza,
- * melyik írás mikor ment ki.
+ * WHY IT EXISTS: the flashes in the hunk↔TUI switch are caused by three
+ * actors' escape writes together (Ink's `beginSuspend`/`endSuspend`, our own
+ * compensations, and the hunk's delayed sequences from the `script` PTY).
+ * Their order CANNOT be guessed — three fix rounds proved that. This tracer
+ * is the MEASUREMENT: it logs, with a timestamp, which write went out when.
  *
- * AMIT NEM LÁT: a hunk SAJÁT írásait. A gyerek `stdio: 'inherit'`-tel a nyers
- * fd-re ír, ami nem megy át a `process.stdout.write`-on. A hunk szekvenciái tehát
- * a naplóban NEM szerepelnek — a HIÁNYUK viszont épp annyira informatív: a
- * saját írásaink közti IDŐRÉS mutatja meg azt az ablakot, ahol a shell látszik.
+ * WHAT IT DOESN'T SEE: the hunk's OWN writes. The child writes to the raw fd
+ * via `stdio: 'inherit'`, which doesn't pass through `process.stdout.write`.
+ * The hunk's sequences therefore DON'T appear in the log — but their ABSENCE
+ * is just as informative: the TIME GAP between our own writes shows the
+ * window where the shell is visible.
  *
- * Használat:
+ * Usage:
  *   TUIPR_NEXT_TRACE=/tmp/tuipr-trace.log pnpm exec tuipr queue
  */
 function installEscapeTrace() {
@@ -387,7 +404,7 @@ function installEscapeTrace() {
   const { appendFileSync } = require_fs()
   const t0 = process.hrtime.bigint()
   const ms = () => Number((process.hrtime.bigint() - t0) / 1000n) / 1000
-  // A NEVESÍTETT SZEKVENCIÁK: csak az, ami a villanás szempontjából számít.
+  // The NAMED SEQUENCES: only the ones that matter for the flash.
   const NAMES = [
     ['\u001B[?1049h', 'ENTER_ALT'],
     ['\u001B[?1049l', 'EXIT_ALT'],
@@ -396,45 +413,49 @@ function installEscapeTrace() {
     ['\u001B[2J', 'CLEAR_SCREEN'],
     ['\u001B[3J', 'CLEAR_SCROLLBACK'],
   ]
-  // MEMÓRIA-PUFFER, NEM SORONKÉNTI FÁJLÍRÁS — MÉRT OK, AZ ELSŐ FUTÁS LELETÉBŐL.
+  // MEMORY BUFFER, NOT A PER-LINE FILE WRITE — A MEASURED REASON, FROM THE
+  // FIRST RUN'S FINDING.
   //
-  // Az `appendFileSync` soronként ~7-9 ms-ot vitt: mérve, a `CHILD_EXIT` marker és
-  // a KÖZVETLENÜL utána álló `write` között 8.8 ms telt el, holott a kódban két
-  // egymást követő utasítás. Egy escape-villanás vizsgálatánál ez végzetes — a
-  // tracer MAGA nagyította fel azokat az ablakokat, amiket mérni akartunk.
-  // Pufferelve a log-hívás ára ~mikroszekundum, tehát az időbélyegek a VALÓDI
-  // sorrendet és réseket mutatják.
+  // `appendFileSync` cost ~7-9 ms per line: measured, 8.8 ms elapsed between
+  // the `CHILD_EXIT` marker and the `write` DIRECTLY after it, even though
+  // they're two consecutive statements in the code. For inspecting an
+  // escape-sequence flash this is fatal — the tracer ITSELF was inflating
+  // the very windows we wanted to measure. Buffered, the cost of a log call
+  // is ~a microsecond, so the timestamps show the REAL order and gaps.
   const buf = []
   const flush = () => {
     if (buf.length === 0) return
     try {
       appendFileSync(target, `${buf.join('\n')}\n`)
       buf.length = 0
-    } catch { /* a trace hibája SOSEM buktathatja az appot */ }
+    } catch { /* the trace's own error must NEVER crash the app */ }
   }
   const log = (kind, detail) => {
     buf.push(`${ms().toFixed(3).padStart(10)}ms  ${kind}${detail ? `  ${detail}` : ''}`)
-    // A PLAFON a memória ellen véd, de akkora, hogy egy `d`+`q` kör BIZTOSAN
-    // elférjen — különben pont a vizsgált szakaszon ütne be a fájlírás késése.
+    // The CEILING guards against memory, but is large enough that a `d`+`q`
+    // round SURELY fits — otherwise the file-write delay would hit exactly
+    // the section under inspection.
     if (buf.length >= 5000) flush()
   }
   process.on('exit', flush)
-  // A MARKEREKET az app hívja (`globalThis.__tuiprTrace?.(…)`) — szándékosan
-  // globálison át, hogy a diagnosztika NE szivárogjon be a modul-gráfba.
+  // The MARKERS are called by the app (`globalThis.__tuiprTrace?.(…)`) —
+  // deliberately through a global, so the diagnostics DON'T leak into the
+  // module graph.
   globalThis.__tuiprTrace = (marker) => log(`>>> ${marker}`)
   const orig = process.stdout.write.bind(process.stdout)
   process.stdout.write = (chunk, ...rest) => {
     try {
       const str = typeof chunk === 'string' ? chunk : String(chunk)
       const hits = NAMES.filter(([seq]) => str.includes(seq)).map(([, name]) => name)
-      if (hits.length > 0) log(hits.join('+'), `(${str.length} bájt)`)
-    } catch { /* lásd fent */ }
+      if (hits.length > 0) log(hits.join('+'), `(${str.length} bytes)`)
+    } catch { /* see above */ }
     return orig(chunk, ...rest)
   }
   log('TRACE_START', `pid=${process.pid}`)
 }
 
-// A `createRequire` már importálva van a fájl tetején; a tracer csak az fs-t kéri.
+// `createRequire` is already imported at the top of the file; the tracer
+// only needs fs.
 function require_fs() {
   return createRequire(import.meta.url)('node:fs')
 }

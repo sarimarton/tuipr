@@ -1,56 +1,61 @@
-// tuipr — PANEL: a LEGFELSŐ core-réteg.
+// tuipr — PANEL: the TOPMOST core layer.
 //
-// Ami itt lakik: az overlay-keret + nyilas választás, a PR-panel állapotgépe
-// (inline info / modális megerősítés), a viewport-korlát, a friction-szöveg
-// (JELÖLT, de NEM TILTÓ) és az attesztációs body két ága.
+// What lives here: the overlay frame + arrow-key selection, the PR panel
+// state machine (inline info / modal confirmation), the viewport limit, the
+// friction text (FLAGGED, but NOT BLOCKING), and the two branches of the
+// attestation body.
 //
-// MIÉRT A LEGFELSŐ: ez a réteg fogyasztja a többit (layout: a keret CELLÁBAN
-// mért tördelése; diagnosis: a progressz-reducer). Ezért itt VÉGZŐDIK a
-// rétegrend — és épp ezért TILOS bármelyik alsó modulból visszahívni ide: az
-// AZONNAL ciklus lenne (a scripts/check-next-modules.mjs gépileg őrzi).
+// WHY THE TOPMOST: this layer consumes the others (layout: the frame's
+// CELL-measured wrapping; diagnosis: the progress reducer). That's why the
+// layer order ENDS here — and precisely why it's FORBIDDEN for any lower
+// module to call back into this one: that would IMMEDIATELY be a cycle (the
+// scripts/check-next-modules.mjs enforces this mechanically).
 import { clampCells, displayWidth, stepIndex, wrapCells } from './layout.mjs'
 import { progressReducer } from './diagnosis.mjs'
 
-// === OVERLAY-KERET + NYILAS VÁLASZTÁS =======================================
+// === OVERLAY FRAME + ARROW-KEY SELECTION ====================================
 
 
-// A keret 1-1 cellát visz oldalanként, a vízszintes padding további 1-1-et. Az
-// Ink `borderStyle` + `paddingX: 1` pontosan ennyit fogyaszt — ha itt kevesebbet
-// számolnánk, a keret jobb oldala tördelődne le.
+// The frame takes 1 cell per side, the horizontal padding another 1 per side.
+// Ink's `borderStyle` + `paddingX: 1` consumes exactly this much — if we
+// counted less here, the frame's right side would wrap.
 const OVERLAY_BORDER_W = 2
 const OVERLAY_PADDING_W = 2
-// A jobb margó: az overlay NE tapadjon a terminál jobb széléhez. A tördelést nem
-// ez akadályozza meg (azt a fenti kettő), hanem az olvashatóságot javítja.
+// The right margin: the overlay should NOT stick to the terminal's right
+// edge. This doesn't prevent wrapping (the two constants above do that), it
+// improves readability.
 const OVERLAY_MARGIN_W = 2
-// A legszűkebb belső hely, ami alatt már nincs értelme keretet rajzolni, de a
-// hívónak akkor is konzisztens számot kell adnunk (nem 0-t és nem negatívot).
+// The narrowest inner space below which drawing a frame no longer makes
+// sense, but the caller still needs a consistent number back (not 0, not
+// negative).
 const OVERLAY_MIN_INNER_W = 1
 
-/** Az overlay-fejlécek: állapot-kind → cím-prefix. Egy helyen, hogy ne csúszzon. */
+/** The overlay headings: state kind → title prefix. In one place so it can't drift. */
 const OVERLAY_TITLES = {
   approve: 'Approve',
   merge: 'Merge',
-  upload: 'Findings feltöltése GitHubra',
+  upload: 'Uploading findings to GitHub',
   'ai-review': 'AI-review',
-  // (wf31/73) A resolve MEGERŐSÍTÉSE: a feloldás AI-t hív (token) ÉS kódot ír egy
-  // eldobható worktree-ben — mindkettő indokolja a kaput, ahogy az approve/merge-nél.
-  resolve: 'conflict-feloldás',
+  // (wf31/73) CONFIRMING resolve: the resolution calls AI (tokens) AND writes
+  // code in a disposable worktree — both justify the gate, same as approve/merge.
+  resolve: 'resolve conflict',
   info: 'Info',
-  error: 'Hiba',
+  error: 'Error',
 }
 
 /**
- * Az overlay KERETE (chrome): cím, lábléc, keret-szín és a CELLÁBAN mért
- * szélességek. A TARTALOM nem itt van — azt az app rendereli, a `innerWidth`-hez
- * clampelve.
+ * The overlay's FRAME (chrome): title, footer, frame color, and the
+ * CELL-measured widths. The CONTENT is not here — the app renders that,
+ * clamped to `innerWidth`.
  *
- * MIÉRT TISZTA FÜGGVÉNY: a "melyik állapotban milyen cím/lábléc/szín" döntés a
- * UX szerződése, és pont ez az, amit a user átalakíttatott (külön képernyő →
- * overlay). Renderben ez nem tesztelhető olcsón; itt igen, és a szélesség-illesztés
- * (60/100/190 oszlop, display-CELLA) is unit-teszt alá kerül.
+ * WHY A PURE FUNCTION: the "which title/footer/color for which state"
+ * decision is the UX contract, and it's exactly what the user had reworked
+ * (separate screen → overlay). In render this isn't cheaply testable; here it
+ * is, and the width-fitting (60/100/190 columns, display CELLS) also comes
+ * under unit test.
  *
- * FAIL-CLOSED az ismeretlen `kind`: null. Egy találgatott cím ("Művelet") azt a
- * képet adná, hogy a UI tudja, mit kérdez — holott nem.
+ * FAIL-CLOSED on an unknown `kind`: null. A guessed title ("Action") would
+ * give the impression that the UI knows what it's asking — when it doesn't.
  */
 export function overlayFrame({ state, columns = 120 } = {}) {
   if (!state || typeof state !== 'object') return null
@@ -61,17 +66,17 @@ export function overlayFrame({ state, columns = 120 } = {}) {
     OVERLAY_BORDER_W + OVERLAY_PADDING_W + OVERLAY_MIN_INNER_W,
     Math.min(columns, Math.max(20, columns - OVERLAY_MARGIN_W)),
   )
-  // A `width` sosem lépheti túl a terminált — a fenti Math.max padlója
-  // elvileg megemelhetné egy nagyon szűk terminálon, ezért itt vágunk.
+  // `width` can never exceed the terminal — the Math.max floor above could in
+  // theory raise it on a very narrow terminal, so we clip here.
   const outer = Math.min(width, Math.max(1, columns))
   const innerWidth = Math.max(OVERLAY_MIN_INNER_W, outer - OVERLAY_BORDER_W - OVERLAY_PADDING_W)
 
   const denied = Array.isArray(state.blockers) && state.blockers.length > 0
   const isError = state.kind === 'error'
   const row = state.row ?? {}
-  // A CÍM VISELI A PR-SZÁMOT: ez a kontextus, amiért az egész refaktor van. A
-  // szám és a `#` SOSEM csonkolódik el — előbb a TÍTULUS fogy el, mert a
-  // "melyik PR?" a fontosabb információ.
+  // THE TITLE CARRIES THE PR NUMBER: this is the context the whole refactor
+  // exists for. The number and the `#` are NEVER truncated — the TITLE runs
+  // out first, because "which PR?" is the more important information.
   const prefix = `${heading}: #${row.number}`
   const rest = row.title ? ` ${row.title}` : ''
   const title = clampCells(prefix + rest, innerWidth)
@@ -85,8 +90,8 @@ export function overlayFrame({ state, columns = 120 } = {}) {
     kind: state.kind,
     title,
     footer,
-    // A KERET SZÍNE a legkorábban felfogott jelzés: a megtagadás és a hiba
-    // PIROS, a token-költő AI-review SÁRGA, a többi CYAN.
+    // THE FRAME COLOR is the earliest-perceived signal: denial and error are
+    // RED, the token-spending AI-review is YELLOW, the rest CYAN.
     borderColor: denied || isError ? 'red' : state.kind === 'ai-review' ? 'yellow' : 'cyan',
     denied,
     width: outer,
@@ -95,116 +100,124 @@ export function overlayFrame({ state, columns = 120 } = {}) {
 }
 
 /**
- * A lábléc (footer) szövege. Külön függvény, hogy a kulcs-hirdetés EGY helyen
- * éljen — a korábbi bug osztálya pont az volt, hogy a keybind három forrásból
- * (kód, legenda, docs) csúszott szét.
+ * The footer text. A separate function so the key advertisement lives in ONE
+ * place — the earlier bug class was exactly that the keybind drifted across
+ * three sources (code, legend, docs).
  *
- * A SORREND szándékos: elöl a DÖNTÉS kulcsai (nyíl, y/N), hátul a zárás. Ha a
- * keskeny terminálon a `clampCells` vág, a döntés kulcsai maradnak meg — egy
- * olyan overlay, amiről nem látszik, hogyan kell igent mondani, használhatatlan.
+ * THE ORDER is deliberate: DECISION keys (arrow, y/N) up front, closing at
+ * the back. If `clampCells` cuts on a narrow terminal, the decision keys
+ * survive — an overlay that doesn't show how to say yes is useless.
  */
 function overlayFooter({ state, denied, isError }) {
-  // Az Esc SOSEM "kilépés" itt: overlay-t zár. A kettő összemosása a user 3.
-  // pontja — nyitott overlaynél a q/Esc nem léphet ki a TUI-ból.
-  if (isError) return 'Esc/q: overlay bezárása'
-  if (denied) return 'bármely gomb (Esc/q is): vissza — a művelet blokkolva van'
+  // Esc is NEVER "exit" here: it closes the overlay. Conflating the two is
+  // the user's 3rd point — with an overlay open, q/Esc must not exit the TUI.
+  if (isError) return 'Esc/q: close overlay'
+  if (denied) return 'any key (including Esc/q): back — the action is blocked'
   if (state.kind === 'info') {
-    return 'j/k: másik sor (a mérés újraindul) · Esc/q: mérés megszakítása + overlay bezárása'
+    return 'j/k: another row (measurement restarts) · Esc/q: cancel measurement + close overlay'
   }
   const parts = []
-  // A NYÍL-affordance CSAK akkor jelenik meg, ha van MIRE váltani: egy útnál a
-  // hirdetett nyíl dead key lenne, és a user azt hinné, hogy elromlott.
+  // The ARROW affordance appears ONLY when there's something to switch TO: on
+  // a single path the advertised arrow would be a dead key, and the user
+  // would think it's broken.
   if (state.kind === 'ai-review' && Array.isArray(state.paths) && state.paths.length > 1) {
-    // A user ÚJABB kérése: "zavar, hogy jobbra-balra nyilat kell használnom" —
-    // a nyíl TÖBBÉ NEM review-út-váltó. A Tab a ciklikus váltó (eddig is
-    // működött, most hirdetjük), a számok (1..N) a közvetlen választás. A
-    // nyíl a budget-lépcsőé marad, amikor a plafon be van kapcsolva — így
-    // egyik funkció sem oszt billentyűt a másikkal.
-    parts.push(`Tab/1-${state.paths.length}: review-út`)
+    // The user's FURTHER request: "it bothers me that I have to use left/right
+    // arrows" — the arrow is NO LONGER the review-path switcher. Tab is the
+    // cyclic switcher (it already worked, now we advertise it), the numbers
+    // (1..N) are direct selection. The arrow stays the budget-step's, when
+    // the ceiling is on — this way neither feature shares a key with the other.
+    parts.push(`Tab/1-${state.paths.length}: review path`)
   }
-  // A MODELL-VÁLTÓ (5b) hirdetése: az `m` a megerősítés-módban szabad kulcs
-  // (a merge `m`-je ide el sem jut), a mnemonika pedig pontos. Csak ott
-  // hirdetjük, ahol él — az ai-review megerősítésén.
-  if (state.kind === 'ai-review' && state.model) parts.push('m: modell')
-  parts.push('y: megerősítés [y/N]')
-  parts.push('Esc/q: mégse')
+  // Advertising the MODEL SWITCHER (5b): `m` is a free key in confirmation
+  // mode (merge's `m` never reaches here), and the mnemonic is exact. We
+  // advertise it only where it's live — on the ai-review confirmation.
+  if (state.kind === 'ai-review' && state.model) parts.push('m: model')
+  parts.push('y: confirm [y/N]')
+  parts.push('Esc/q: cancel')
   return parts.join(' · ')
 }
 
 
-// === PANEL: EGY PR-PANEL (info + mérés + következő lépések) =================
+// === PANEL: A SINGLE PR PANEL (info + measurement + next steps) ============
 //
-// A REFAKTOR TÁRGYA (user-kérés, szó szerint): "Az alertek, üzenetek, dialog
-// külön képernyőn van… jobb lenne ha a lista fölött keretes overlayben
-// jelennének meg" + "info és rebase dialog összevonása: én összevonnám a kettőt.
-// Mindkettőben van extra információ, ami alapján lehetne továbbmenni a review-ra."
+// THE SUBJECT OF THE REFACTOR (user request, verbatim): "The alerts,
+// messages, dialogs are on a separate screen… it would be better if they
+// appeared in a framed overlay above the list" + "merging the info and
+// rebase dialog: I'd merge the two. Both have extra info that could let you
+// move on to the review."
 //
-// A KORÁBBI ÁLLAPOT: NÉGY külön dialógus (info, approve-confirm, merge-confirm,
-// ai-review-confirm), mindegyik a maga kulcs-készletével, és a "megnézem →
-// visszalépek → cselekszem" hurok minden döntésnél lefutott. Az info-panelről
-// nem lehetett approve-olni; ki kellett lépni belőle, hogy az `a` éljen.
+// THE PREVIOUS STATE: FOUR separate dialogs (info, approve-confirm,
+// merge-confirm, ai-review-confirm), each with its own key set, and the
+// "look → step back → act" loop ran on every decision. You couldn't approve
+// from the info panel; you had to exit it for `a` to be live.
 //
-// AZ ÚJ MODELL EGY ÁLLAPOT, KÉT MÓDDAL — és a mód a DIALÓGUS-TIPOLÓGIÁBÓL
-// következik (a user 2. elve), nem konfigurációból:
+// THE NEW MODEL IS ONE STATE, TWO MODES — and the mode follows from the
+// DIALOG TYPOLOGY (the user's 2nd principle), not from configuration:
 //
-//   mode: 'inline'  — INFO. A kiválasztott sor ALATT ül, a lista végig látszik,
-//                     és a panel alatt is lehet navigálni (j/k), MÉRÉS KÖZBEN is.
-//                     Indok: az info KONTEXTUS, nem döntés — modálként elvenné a
-//                     listát, ami épp az összehasonlítás alapja.
-//   mode: 'modal'   — MEGERŐSÍTÉS (approve / merge / AI-review / findings-upload).
-//                     Az 5a lelet óta a RENDER ugyanaz az inline panel (a lista
-//                     LÁTHATÓ marad — a user: "az info panel az egyetlen dialog
-//                     útvonal a PR műveletekhez"); a mód a KULCSOKBAN válik el:
-//                     a fel/le a VÁLASZTÁST lépteti, NEM a listát. Indok: egy
-//                     várakozó, visszavonhatatlan döntésnél a lista-navigáció
-//                     fegyver — a kurzor elmozdulhatna a döntés alól (a
-//                     poll-fejezet ugyanezért nem tölt újra magától).
+//   mode: 'inline'  — INFO. Sits BELOW the selected row, the list stays
+//                     visible throughout, and you can navigate (j/k) below
+//                     the panel too, even WHILE MEASURING. Rationale: info is
+//                     CONTEXT, not a decision — as a modal it would take over
+//                     the list, which is exactly the basis for comparison.
+//   mode: 'modal'   — CONFIRMATION (approve / merge / AI-review /
+//                     findings-upload). Since finding 5a, the RENDER is the
+//                     same inline panel (the list STAYS VISIBLE — the user:
+//                     "the info panel is the only dialog route for PR
+//                     actions"); the mode is distinguished in the KEYS: up/down
+//                     steps the SELECTION, NOT the list. Rationale: on a
+//                     pending, irreversible decision, list navigation is a
+//                     weapon — the cursor could move out from under the
+//                     decision (the poll chapter doesn't auto-refresh for the
+//                     same reason).
 //
-// NINCS KAPCSOLÓ a kettő között. A user kimondott indoka: "egy kapcsoló, amit
-// senki nem állít, csak kódutat duplikál".
+// THERE IS NO SWITCH between the two. The user's stated reason: "a switch
+// nobody sets just duplicates a code path."
 //
-// A MODÁL A PANELBŐL NYÍLIK, nem helyette: a `panelToModal` MEGTARTJA a `row`-t
-// és a `progress`-t, tehát az Esc a MODÁLBÓL az INFO-panelre lép vissza, nem a
-// listára. Így a "megnézem → cselekszem → visszanézem" kör a panelen belül
-// zárul — pontosan az, amit a user kért.
+// THE MODAL OPENS FROM THE PANEL, not in place of it: `panelToModal` KEEPS
+// `row` and `progress`, so Esc from the MODAL returns to the INFO panel, not
+// the list. This way the "look → act → look again" loop closes within the
+// panel — exactly what the user asked for.
 
 /**
- * A panel megnyitása INLINE módban (az `i`, illetve bármely sor-kiválasztás).
+ * Opening the panel in INLINE mode (`i`, or any row selection).
  *
- * A `progress` a mérés-állapotgép (progressInit/Reducer) állapota, vagy null. A
- * panel ÁLLAPOTA HORDOZZA — nem külön state, mert a mérés a panel egyik sávja,
- * és a kettő szétválasztása pont azt a négy-dialógusos szétesést hozná vissza.
+ * `progress` is the state of the measurement state machine
+ * (progressInit/Reducer), or null. The PANEL STATE CARRIES it — not a
+ * separate state, because measurement is one of the panel's bands, and
+ * splitting the two apart would bring back exactly the four-dialog breakup.
  */
 export function panelOpen({ row, progress = null } = {}) {
   return { mode: 'inline', row: row ?? null, progress, modal: null }
 }
 
 /**
- * A panel bezárása. NULL-t ad — és ez load-bearing: a hívó EGY state-et null-oz,
- * tehát ORPHAN MODÁL nem maradhat.
+ * Closing the panel. Returns NULL — and this is load-bearing: the caller
+ * nulls out ONE state, so an ORPHANED MODAL can't remain.
  *
- * MIÉRT KELL EZ FÜGGVÉNYKÉNT (és nem egy `setPanel(null)` a hívóban): a korábbi
- * kódban a `confirm` és az `info` KÜLÖN state volt, és a zárási utak
- * szétcsúsztak — volt ág, ami az egyiket zárta, a másikat nem. Egy nyitva maradt
- * confirm a lista fölött azt jelentette, hogy a következő `y` egy MÁR ELFELEJTETT
- * PR-t approve-olt volna. Egy állapot + egy zárás = az osztály kiirtva.
+ * WHY THIS NEEDS TO BE A FUNCTION (and not a `setPanel(null)` at the call
+ * site): in the earlier code `confirm` and `info` were SEPARATE states, and
+ * the closing paths drifted apart — there was a branch that closed one but
+ * not the other. A confirm left open above the list meant the next `y` would
+ * approve an ALREADY-FORGOTTEN PR. One state + one close = the bug class
+ * eliminated.
  */
 export function panelClose() {
   return null
 }
 
 /**
- * Átmenet MODÁL módba: a megerősítés a panelből nyílik.
+ * Transition into MODAL mode: the confirmation opens from the panel.
  *
- * A `row` és a `progress` MEGMARAD: (a) a modál fejléce ugyanarról a PR-ról
- * beszél, tehát nem kell újra átadni (két forrás = elcsúszás), és (b) az Esc a
- * modálból az INFO-panelre lép vissza — a mért diagnózis nem veszik el egy
- * meggondolt-magam gesztus miatt.
+ * `row` and `progress` are KEPT: (a) the modal's heading talks about the same
+ * PR, so it doesn't need to be passed again (two sources = drift), and (b)
+ * Esc from the modal returns to the INFO panel — the measured diagnosis isn't
+ * lost over a change-of-mind gesture.
  *
- * Az `armedAt` a dwell-kapu horgonya (confirmAccepts). Itt, az ÁTMENETNÉL
- * születik, nem a render alatt: a dwell azt méri, mióta van a döntés a szem
- * előtt, és egy renderben felvett időpont minden újrarendereléssel újraindulna —
- * a typeahead-védelem néma no-op lenne.
+ * `armedAt` is the anchor for the dwell gate (confirmAccepts). It's born
+ * HERE, at the TRANSITION, not during render: dwell measures how long the
+ * decision has been in front of the user's eyes, and a timestamp taken during
+ * render would restart on every re-render — the typeahead protection would be
+ * a silent no-op.
  */
 export function panelToModal(st, { kind, blockers = [], armedAt = Date.now(), ...rest } = {}) {
   if (!st || typeof st !== 'object') return null
@@ -215,31 +228,34 @@ export function panelToModal(st, { kind, blockers = [], armedAt = Date.now(), ..
   }
 }
 
-/** Vissza a modálból az INLINE panelre (Esc a döntésről). */
+/** Back from the modal to the INLINE panel (Esc from the decision). */
 export function panelToInline(st) {
   if (!st || typeof st !== 'object') return null
   return { ...st, mode: 'inline', modal: null }
 }
 
 /**
- * Egy mérés-esemény beépítése a PANEL állapotába, a `pr`-hoz kötött
- * stale-védelemmel. TISZTA: stale eseményre a KAPOTT state-et adja vissza
- * (referencia-azonos), így a React setState no-op marad.
+ * Folding a measurement event into the PANEL's state, with `pr`-bound
+ * stale protection. PURE: for a stale event it returns the RECEIVED state
+ * (reference-identical), so React's setState stays a no-op.
  *
- * MIÉRT KÜLÖN FÜGGVÉNY az `applyProgressToInfo` MELLETT (és miért nem hívjuk azt
- * közvetlenül a paneire): az `applyProgressToInfo` az INFO-alakot
- * (`{row, progress}`) építi újra spreaddel. Panel-alakra hívva működni LÁTSZANA,
- * de ha bárki később a spreadet szűkíti (vagy egy új kulcs kerül a panelbe), a
- * `mode` és a `modal` ELVESZNE. A következmény ÉLŐBEN: egy nyitott modál fölött
- * befutó mérés-esemény NÉMÁN bezárná a modált (`mode === undefined`), és a user
- * döntése a semmibe futna — a mérés a háttérben fut, tehát ez pont a
- * legrosszabb pillanatban történne. A KÜLÖN függvény + a rá írt teszt kizárja.
+ * WHY A SEPARATE FUNCTION next to `applyProgressToInfo` (and why not call
+ * that directly on the panel): `applyProgressToInfo` rebuilds the INFO shape
+ * (`{row, progress}`) via spread. Called on the panel shape it would LOOK
+ * like it works, but if anyone later narrows the spread (or a new key lands
+ * on the panel), `mode` and `modal` would BE LOST. The consequence IN
+ * PRODUCTION: a measurement event landing over an open modal would SILENTLY
+ * close the modal (`mode === undefined`), and the user's decision would run
+ * into nothing — the measurement runs in the background, so this would
+ * happen at exactly the worst moment. The SEPARATE function + the test
+ * written against it rules this out.
  *
- * A HÁROM ELDOBÁSI OK, mind más hibaosztály:
- *   - `null` panel (közben zárták): zárt panel nem éled újra;
- *   - `row.number !== pr`: a user MÁS sorra lépett, a régi mérés callbackje az
- *     ÚJ panel state-jébe írna — más PR mért conflict-tényét olvasná a user;
- *   - `progress` null (nem mérhető, stacked sor): nincs mit léptetni.
+ * THE THREE DROP REASONS, each a different bug class:
+ *   - `null` panel (closed in the meantime): a closed panel doesn't revive;
+ *   - `row.number !== pr`: the user moved to a DIFFERENT row, the old
+ *     measurement's callback would write into the NEW panel's state — the
+ *     user would read another PR's measured conflict fact;
+ *   - `progress` null (unmeasurable, stacked row): nothing to step.
  */
 export function applyProgressToPanel(cur, pr, ev) {
   if (!cur || typeof cur !== 'object') return cur
@@ -248,18 +264,18 @@ export function applyProgressToPanel(cur, pr, ev) {
 }
 
 /**
- * MELYIK SÁV LÁTSZIK — a panel tartalmi szerződése, tiszta függvényben.
+ * WHICH BAND SHOWS — the panel's content contract, in a pure function.
  *
- * A sávok NEVEI a render ágait vezérlik. Azért itt élnek és nem a renderben,
- * mert a "mi látszik melyik állapotban" a UX SZERZŐDÉSE: ez az, amit a user
- * átalakíttatott, és amit a nézetből csak élő Ink-renderrel (drágán) lehetne
- * visszamérni.
+ * The bands' NAMES drive the render branches. They live here, not in render,
+ * because "what shows in which state" is the UX CONTRACT: it's what the user
+ * had reworked, and what could only be measured back from the view with a
+ * live (expensive) Ink render.
  *
- * INLINE: info + mérés + AKCIÓK. A harmadik a refaktor lényege — a következő
- *   lépések (`d`/`r`/`a`/`m`) a panelen BELÜL vannak, tehát a
- *   "visszalépek-hogy-cselekedjek" hurok megszűnt.
- * MODÁL: confirm. Az AKCIÓ-lista SZÁNDÉKOSAN NINCS itt: egy pufferelt vagy
- *   elgépelt `m` a döntés fölött egy MÁSIK visszavonhatatlan akciót indítana.
+ * INLINE: info + measurement + ACTIONS. The third is the point of the
+ *   refactor — the next steps (`d`/`r`/`a`/`m`) are INSIDE the panel, so the
+ *   "step back to act" loop is gone.
+ * MODAL: confirm. The ACTION LIST is DELIBERATELY NOT here: a buffered or
+ *   mistyped `m` over the decision would fire ANOTHER irreversible action.
  */
 export function panelSections(st) {
   if (!st || typeof st !== 'object') return []
@@ -268,187 +284,201 @@ export function panelSections(st) {
 }
 
 /**
- * MELYIK BILLENTYŰ ÉLES — a kulcs-készlet EGY forrásból.
+ * WHICH KEY IS LIVE — the key set from ONE source.
  *
- * A `'choice'` pszeudo-kulcs a fel/le VÁLASZTÁS-léptetést jelöli (modálban). Nem
- * betű, mert nem betű: a nyíl és a j/k is ide képződik le. A HALMAZ mondja ki,
- * hogy modálban a fel/le NEM lista-navigáció — ez a user 2. elvének gépi alakja,
- * és a régi kódban ez pont elcsúszott (a confirm ágon a j/k `undefined` ágra
- * futott, tehát NÉMÁN bezárta az overlayt).
+ * The `'choice'` pseudo-key denotes up/down SELECTION-stepping (in modal). Not
+ * a letter, because it isn't one: both the arrow and j/k map onto it. The SET
+ * states that in modal, up/down is NOT list navigation — this is the
+ * mechanical form of the user's 2nd principle, and in the old code this is
+ * exactly where it drifted (on the confirm branch, j/k fell into the
+ * `undefined` branch, SILENTLY closing the overlay).
  */
 export function panelKeys(st) {
   if (!st || typeof st !== 'object') return []
   if (st.mode === 'modal') {
-    // A BLOKKOLT művelet (denied) modálján a megerősítés SEM éles: nincs mit
-    // megerősíteni. Csak a zárás — enélkül a `y` egy megtagadott műveletre
-    // "sikerként" olvasható visszajelzést adna.
+    // On a BLOCKED action's (denied) modal, confirmation isn't live either:
+    // there's nothing to confirm. Only closing — without this, `y` would read
+    // as "success" feedback on a denied action.
     const denied = (st.modal?.blockers?.length ?? 0) > 0
     if (denied) return ['escape']
-    // A `'choice'` (fel/le választás-léptetés) CSAK ott éles, ahol VAN lista —
-    // ugyanabból a forrásból, amiből a lábléc hirdeti (MODAL_CHOICE_KINDS).
-    // Enélkül a kulcs-halmaz és a lábléc szétcsúszhatna, és a nyíl dead key lenne.
-    // (wf31/69) A `'return'` (Enter) A VÁLASZTÓS ÁGON ÉLES — ÉS EDDIG HIÁNYZOTT
-    // EBBŐL A HALMAZBÓL. Az Enter a KIVÁLASZTOTT ágat hajtja végre (a `'Nem'`-en
-    // zár, az `'Igen'`-en a `y`-ra normalizál), tehát a szerződés eddig kevesebbet
-    // mondott, mint amennyi működik — pont az az elcsúszás, amit ez a halmaz
-    // hivatott megelőzni.
+    // `'choice'` (up/down selection-stepping) is live ONLY where a list
+    // EXISTS — from the same source the footer advertises it from
+    // (MODAL_CHOICE_KINDS). Without this, the key set and the footer could
+    // drift apart, and the arrow would be a dead key.
+    // (wf31/69) `'return'` (Enter) IS LIVE ON THE CHOICE BRANCH — AND WAS
+    // MISSING FROM THIS SET UNTIL NOW. Enter executes the SELECTED branch
+    // (closes on `'No'`, normalizes to `y` on `'Yes'`), so the contract used
+    // to say less than what actually worked — exactly the drift this set is
+    // meant to prevent.
     return modalHasChoices(st.modal?.kind)
       ? ['y', 'n', 'choice', 'return', 'escape']
       : ['y', 'n', 'escape']
   }
-  // INLINE: a lista-navigáció ÉS az öt akció (a feltöltéssel — 3. pont), plusz
-  // az AI-review megszakítása (`x` — a progressz-sor a panelben hirdeti), a
-  // caveat-lábjegyzet ki/becsukása (`return`) és a zárás.
+  // INLINE: list navigation AND the five actions (including upload — point 3),
+  // plus canceling the AI-review (`x` — the progress bar advertises it in the
+  // panel), toggling the caveat footnote (`return`), and closing.
   //
-  // (wf31/30) A `'return'` (Enter) A PANELT ZÁRJA — TOGGLE. A listán az Enter
-  // NYITJA, tehát ugyanaz a gomb zárja is: egy gomb, egy fogalom („részletek
-  // ki/be"). A korábbi alak a caveat-lábjegyzetet togglézta, de az a lábjegyzet
-  // MEGSZŰNT (a mérési részletek mindig látszanak) — a kulcs így felszabadult.
-  // Az `Esc` VÁLTOZATLANUL zár: az muscle memory, és a lábléc is hirdeti.
+  // (wf31/30) `'return'` (Enter) CLOSES THE PANEL — A TOGGLE. On the list,
+  // Enter OPENS, so the same button closes too: one button, one concept
+  // ("details on/off"). The earlier shape toggled the caveat footnote, but
+  // that footnote is GONE (the measurement details always show) — so the key
+  // freed up. `Esc` UNCHANGED still closes: that's muscle memory, and the
+  // footer advertises it too.
   //
-  // MIÉRT ITT ÉS NEM CSAK AZ App-BAN: ez a halmaz a "melyik gomb éles" GÉPI
-  // forrása. A projekt MÉRT hibaosztálya, hogy a kulcs-készlet és a valódi
-  // kezelő szétcsúszik (az `f` modálján a lábléc nyilat hirdetett, a body nem
-  // adott listát — a nyíl DEAD KEY volt, és a user nem tudta, a gomb rossz-e
-  // vagy a UI fagyott le).
-  // (wf31/10) A `'c'` A CONFLICT-MÉRÉS EXPLICIT INDÍTÁSA. A panel-nyitás többé
-  // NEM mér (a kumulatív igazságot a next-gráf és a CI-címkék adják, mérés
-  // nélkül), tehát a drága út saját gesztust kapott — és ha nincs kulcs, ami
-  // hirdeti, a mérés ELÉRHETETLEN lenne.
+  // WHY HERE AND NOT JUST IN App: this set is the MECHANICAL source of
+  // "which button is live". The project's MEASURED bug class is that the key
+  // set and the actual handler drift apart (on the `f` modal the footer
+  // advertised an arrow, the body gave no list — the arrow was a DEAD KEY, and
+  // the user didn't know if the button was broken or the UI had frozen).
+  // (wf31/10) `'c'` IS THE EXPLICIT TRIGGER FOR CONFLICT MEASUREMENT. Opening
+  // the panel no longer measures (the cumulative truth comes from the next
+  // graph and CI labels, without measuring), so the expensive path got its
+  // own gesture — and without a key advertising it, the measurement would be
+  // UNREACHABLE.
   //
-  // (wf31/17) AZ `'f'` ITT MARAD, A LÁBLÉC FELTÉTELESSÉGE ELLENÉRE. MIÉRT: ez a
-  // halmaz azt mondja meg, mely kulcsokat NE nyelje el a panel — a feltöltés
-  // ELÉRHETŐSÉGÉT a `doUpload` maga dönti el (ott van a hunk-session mérése is,
-  // amit a render-úton nem tehetünk meg). A lábléc a HIRDETÉST szűri (nincs dead
-  // key), a kezelő a VÉGREHAJTÁST — a kettő nem ugyanaz a kérdés. Ha az `f` itt
-  // kiesne, egy hirdetett `f` (van feltölthető anyag) NÉMÁN elhalna.
-  // (wf31/53) AZ `'s'` A STACKELÉS. A mérés MÁR eldöntötte, hogy van-e stack-cél
-  // (`conflictAdvice.offerStack` + `stackOn`) — eddig viszont csak a PARANCS volt
-  // kiírva, a usernek kézzel kellett átgépelnie. A user kérése: "a stackelést fel
-  // kellene ajánlani az info panel statusában ebben a state-ben (pending UI-jal)".
+  // (wf31/17) `'f'` STAYS HERE, DESPITE THE FOOTER'S CONDITIONALITY. WHY: this
+  // set says which keys the panel must NOT swallow — `doUpload` itself decides
+  // upload AVAILABILITY (it also does the hunk-session measurement, which we
+  // can't do on the render path). The footer filters the ADVERTISEMENT (no
+  // dead key), the handler filters the EXECUTION — the two aren't the same
+  // question. If `f` dropped out here, an advertised `f` (uploadable material
+  // exists) would SILENTLY die.
+  // (wf31/53) `'s'` IS STACKING. The measurement has ALREADY decided whether
+  // there's a stack target (`conflictAdvice.offerStack` + `stackOn`) — until
+  // now only the COMMAND was printed out, the user had to retype it by hand.
+  // The user's request: "stacking should be offered in the info panel's status
+  // in this state (with pending UI)".
   //
-  // A KULCS AKKOR IS ITT VAN, HA ÉPP NINCS AJÁNLAT — ugyanaz az elv, ami az `'f'`
-  // ottmaradását indokolja: ez a halmaz azt mondja meg, mely kulcsokat NE nyelje
-  // el a panel, a HIRDETÉST a lábléc szűri (`stackLabel`), a VÉGREHAJTHATÓSÁGOT
-  // pedig a `doStack` dönti el — ott van a branch-mérés, amit a render-úton nem
-  // tehetünk meg.
-  // (wf31/73) A `'v'` A CONFLICT-FELOLDÁS. A kulcs akkor is itt van, ha épp nincs
-  // mit feloldani (nincs mérés vagy nincs culprit) — ugyanaz az elv, mint az `'f'`
-  // és az `'s'` esetén: ez a halmaz azt mondja meg, mely kulcsokat NE nyelje el a
-  // panel, a HIRDETÉST a body szűri, a VÉGREHAJTHATÓSÁGOT a `doResolve`.
+  // THE KEY IS HERE EVEN WHEN THERE'S NO OFFER — same principle that justifies
+  // `'f'` staying: this set says which keys the panel must NOT swallow, the
+  // footer filters the ADVERTISEMENT (`stackLabel`), and `doStack` decides
+  // EXECUTABILITY — that's where the branch measurement lives, which we can't
+  // do on the render path.
+  // (wf31/73) `'v'` IS CONFLICT RESOLUTION. The key is here even when there's
+  // nothing to resolve (no measurement or no culprit) — same principle as
+  // `'f'` and `'s'`: this set says which keys the panel must NOT swallow, the
+  // body filters the ADVERTISEMENT, `doResolve` decides EXECUTABILITY.
   return ['j', 'k', 'c', 'd', 'r', 'f', 'a', 'm', 's', 'v', 'x', 'return', 'escape']
 }
 
 /**
- * A MODÁL VÁLASZTÁSAI, és a DEFAULT a NEM.
+ * THE MODAL'S CHOICES, and the DEFAULT is NO.
  *
- * MIÉRT A NEM AZ ELSŐ (fail-closed): a modál egy visszavonhatatlan, kívülről
- * látható akciót erősít meg (approve / merge / GitHub-review-poszt). A nyitó
- * választás ezért a biztonságos ág: egy vaktában leütött Enter/le-fel NEM
- * indíthat semmit. A `y` továbbra is közvetlen igen (a dwell-kapu mögött) — a
- * választó-lista a NYILAS út, nem a helyettesítője.
+ * WHY NO COMES FIRST (fail-closed): the modal confirms an irreversible,
+ * externally visible action (approve / merge / GitHub review post). The
+ * opening choice is therefore the safe branch: a blindly hit Enter/up-down
+ * can NOT start anything. `y` is still a direct yes (behind the dwell gate) —
+ * the choice list is the ARROW-KEY path, not its replacement.
  */
 export const MODAL_CHOICES = [
-  { id: 'no', label: 'Nem' },
-  { id: 'yes', label: 'Igen' },
+  { id: 'no', label: 'No' },
+  { id: 'yes', label: 'Yes' },
 ]
 
 /**
- * MELY MODÁL-FAJTÁK KAPNAK NYILAS VÁLASZTÓ-LISTÁT — EGY forrásból.
+ * WHICH MODAL KINDS GET AN ARROW-KEY CHOICE LIST — from ONE source.
  *
- * A választó-lista az approve/merge ágon él, mert az a FRICTION-döntés (a
- * review-nyom kimondása + a tét kimondása). A findings-feltöltés és az AI-review
- * NEM a review megtörténtét állítja (az egyik maga a review, a másik
- * költés-döntés), ott a lista értelmetlen zaj lenne.
+ * The choice list lives on the approve/merge branch, because that's the
+ * FRICTION decision (stating the review trace + stating the stakes). The
+ * findings-upload and the AI-review do NOT assert that a review happened
+ * (one IS the review, the other is a spend decision) — there the list would
+ * be meaningless noise.
  *
- * MIÉRT KELL EZ EXPORTÁLT KONSTANSKÉNT (ÉLŐ RENDERBEN MÉRT BUG): a lábléc és a
- * body KÜLÖN döntött arról, van-e lista. Az `f` (upload) modálján a lábléc
- * hirdette az `↑/↓: választás`-t, a body viszont csak egy sima
- * "Megerősíted? [y/N]" sort adott — a nyíl ott DEAD KEY volt. A user megnyomja,
- * semmi nem történik, és nem tudja, hogy a gomb nem működik, vagy a UI fagyott le.
- * Ugyanaz az elv, amiért az `overlayFooter` a review-út nyilát is CSAK két út
- * esetén hirdeti. EGY forrás → a kettő nem tud szétcsúszni.
+ * WHY THIS NEEDS TO BE AN EXPORTED CONSTANT (BUG MEASURED IN LIVE RENDER):
+ * the footer and the body decided SEPARATELY whether there's a list. On the
+ * `f` (upload) modal the footer advertised `↑/↓: choose`, but the body gave
+ * just a plain "Confirm? [y/N]" line — the arrow was a DEAD KEY there. The
+ * user presses it, nothing happens, and they don't know if the button is
+ * broken or the UI froze. Same principle as why `overlayFooter` advertises
+ * the review-path arrow only when there are two paths. ONE source → the two
+ * can't drift apart.
  */
-// (wf31/73) A `resolve` IS VÁLASZTHATÓ NYÍLLAL — ugyanaz a kapu-élmény, mint az
-// approve/merge esetén: a modál nyitó választása a BIZTONSÁGOS ág (Nem), és a
-// ←/→ + ⏎ út is él. Egy y/N-only kapu itt inkonzisztens lenne a másik két
-// költő akcióval.
+// (wf31/73) `resolve` IS ALSO CHOOSABLE BY ARROW — the same gate experience
+// as approve/merge: the modal's opening choice is the SAFE branch (No), and
+// the ←/→ + ⏎ path is live too. A y/N-only gate here would be inconsistent
+// with the other two spending actions.
 export const MODAL_CHOICE_KINDS = new Set(['approve', 'merge', 'resolve'])
 
-/** Van-e nyilas választó-lista ezen a modál-fajtán? */
+/** Does this modal kind get an arrow-key choice list? */
 export function modalHasChoices(kind) {
   return MODAL_CHOICE_KINDS.has(kind)
 }
 
 /**
- * A választás léptetése fel/le nyíllal — a `stepIndex` szerződésével (körbejár,
- * a degenerált indexet ELŐBB normalizálja).
+ * Stepping the choice up/down with the arrow — per `stepIndex`'s contract
+ * (wraps, normalizes a degenerate index FIRST).
  *
- * Külön nevű függvény, nem a `stepIndex` közvetlen hívása a renderben: a modál
- * választás-tere FIX (két elem), és így a hívó nem tudja véletlenül más
- * hosszúsággal hívni (a `paths` tömbbel pl. — az egy MÁS választás-tér).
+ * A separately named function, not a direct call to `stepIndex` in render:
+ * the modal's choice space is FIXED (two elements), so the caller can't
+ * accidentally call it with a different length (e.g. the `paths` array — a
+ * DIFFERENT choice space).
  */
 export function modalChoiceStep(current, delta) {
   return stepIndex(current, MODAL_CHOICES.length, delta)
 }
 
 /**
- * A LEGKEVESEBB LISTA-SOR, amit a panel meghagy.
+ * THE FEWEST LIST ROWS the panel leaves behind.
  *
- * A DÖNTÉS: szűk terminálon a PANEL rövidül, NEM a lista tűnik el.
+ * THE DECISION: on a narrow terminal the PANEL shrinks, NOT the list that
+ * disappears.
  *
- * Az indok a refaktor eredeti oka: a régi kód a dialógust TELJES KÉPERNYŐS
- * cserével nyitotta, és a user elvesztette a listát — nem látta, MELYIK PR-ról
- * szól a kérdés. Ha a viewport a panelnek adná a helyet, ugyanoda érkeznénk
- * vissza, csak fokozatosan. A lista a KONTEXTUS; a panel tartalma pedig
- * scrollozható/csonkolható, tehát ott a veszteség VISSZANYERHETŐ.
+ * The reason is the refactor's original cause: the old code opened the
+ * dialog with a FULL-SCREEN swap, and the user lost the list — couldn't see
+ * WHICH PR the question was about. If the viewport gave the room to the
+ * panel, we'd arrive back at the same place, just gradually. The list is the
+ * CONTEXT; the panel's content, on the other hand, is scrollable/truncatable,
+ * so there the loss is RECOVERABLE.
  *
- * A 3 nem esztétikai szám: a kurzor sora + egy-egy szomszéd. Egyetlen sorral a
- * "hol vagyok a queue-ban" kérdés megválaszolhatatlan (nincs mihez képest), és
- * épp az összehasonlítás az, amiért a lista ott marad.
+ * The 3 isn't an aesthetic number: the cursor's row + one neighbor on each
+ * side. With a single row the "where am I in the queue" question is
+ * unanswerable (nothing to compare against), and comparison is exactly why
+ * the list stays.
  */
 export const PANEL_MIN_LIST_ROWS = 3
 
 /**
- * A VIEWPORT: hány lista-sor és hány panel-sor látszik, és hol kezdődik a
- * lista-ablak.
+ * THE VIEWPORT: how many list rows and how many panel rows show, and where
+ * the list window starts.
  *
- * MIÉRT KELL EGYÁLTALÁN: a lista NEM virtualizált — eddig minden sor
- * renderelődött. Amíg a dialógus teljes képernyős volt, ez nem látszott (a lista
- * nem volt ott); az INLINE panel viszont a lista ALÁ kerül, tehát a
- * lista-magasság + panel-magasság + chrome együtt túllépheti a terminált. Az Ink
- * ilyenkor felfelé tolja a tartalmat: ELŐBB a FEJLÉC csúszik ki (az, ami a
- * betöltés idejét és az elavultság-jelzést hordozza), majd a lista teteje. A
- * user így pont azt veszíti el, amiért a fejléc-fejezet készült.
+ * WHY THIS IS NEEDED AT ALL: the list is NOT virtualized — until now every
+ * row got rendered. While the dialog was full-screen, this didn't show (the
+ * list wasn't there); the INLINE panel, though, sits BELOW the list, so
+ * list-height + panel-height + chrome combined can exceed the terminal. Ink
+ * then pushes the content upward: FIRST the HEADER slides out (the one
+ * carrying the load time and the staleness indicator), then the top of the
+ * list. So the user loses exactly what the header chapter was built for.
  *
- * A SZERZŐDÉS három pontja, mind teszt alatt:
- *   1) visibleRows + panelRows + chrome <= height  — SOHA nem lóg túl;
- *   2) a KURZOR SORA MINDIG az ablakban van — enélkül a panel egy nem látható
- *      sorról beszélne (a legrosszabb fajta hazug UI);
- *   3) a lista legalább `PANEL_MIN_LIST_ROWS` sort kap, ha van annyi sor —
- *      a panel csonkolódik, nem a kontextus.
+ * THE CONTRACT has three points, all under test:
+ *   1) visibleRows + panelRows + chrome <= height — NEVER overflows;
+ *   2) THE CURSOR'S ROW IS ALWAYS in the window — without this the panel
+ *      would talk about a row that isn't visible (the worst kind of lying
+ *      UI);
+ *   3) the list gets at least `PANEL_MIN_LIST_ROWS` rows, if there are that
+ *      many — the panel is what truncates, not the context.
  *
- * A CSONKOLÁS KIMONDVA: a `panelTruncated` a modellben van, hogy a nézet ki
- * tudja írni ("… még N sor"). Egy némán elvágott panel ugyanaz a hibaosztály,
- * mint a némán elnyelt hiba: a user nem tudja, hogy van még.
+ * THE TRUNCATION IS STATED: `panelTruncated` is in the model so the view can
+ * print it ("… N more rows"). A silently cut-off panel is the same bug class
+ * as a silently swallowed error: the user has no idea there's more.
  */
 export function panelViewport({ rowCount = 0, cursor = 0, height = 24, panelHeight = 0, chrome = 4 } = {}) {
   const rows = Math.max(0, Math.floor(Number(rowCount) || 0))
-  // A magasság FAIL-SOFT: nem-TTY-n vagy resize közben a `rows` 0/undefined
-  // lehet, és egy 0-s magasság minden sort elnyelne. A 24 a klasszikus default.
+  // Height is FAIL-SOFT: on a non-TTY or during resize `rows` can be
+  // 0/undefined, and a height of 0 would swallow every row. 24 is the classic
+  // default.
   const h = Number.isFinite(Number(height)) && Number(height) > 0 ? Math.floor(Number(height)) : 24
   const ch = Math.max(0, Math.floor(Number(chrome) || 0))
   const wanted = Math.max(0, Math.floor(Number(panelHeight) || 0))
-  // A chrome (fejléc + status + legenda) FIX költség: ami utána marad, azon
-  // osztozik a lista és a panel.
+  // The chrome (header + status + legend) is a FIXED cost: what's left after
+  // it is shared between the list and the panel.
   const room = Math.max(0, h - ch)
   if (wanted === 0) {
     const visible = Math.min(rows, room)
     return { first: clampFirst(rows, cursor, visible), visibleRows: visible, panelRows: 0, panelTruncated: false }
   }
-  // A LISTA KAP ELŐBB — de csak a minimumot (vagy amennyi sor van, ha kevesebb).
-  // Így a panel a MARADÉKON osztozik, és ha a maradék kevesebb, mint amit kért,
-  // a PANEL csonkol.
+  // THE LIST GETS SERVED FIRST — but only the minimum (or however many rows
+  // there are, if fewer). This way the panel shares the REMAINDER, and if the
+  // remainder is less than it asked for, the PANEL truncates.
   const listFloor = Math.min(rows, PANEL_MIN_LIST_ROWS, room)
   const panelRoom = Math.max(0, room - listFloor)
   const panelRows = Math.min(wanted, panelRoom)
@@ -462,25 +492,26 @@ export function panelViewport({ rowCount = 0, cursor = 0, height = 24, panelHeig
 }
 
 /**
- * A PANEL TÖRZSÉNEK ELVÁGÁSA `maxRows` MEGJELENÍTETT sorra.
+ * CUTTING THE PANEL BODY off at `maxRows` DISPLAYED rows.
  *
- * MIÉRT KELL (MÉRT BUG, ÉLŐ RENDERBŐL): az első változatban a `panelViewport`
- * HELYESEN adta vissza a `panelTruncated: true`-t, a nézet KI IS ÍRTA ("a panel
- * csonkolva"), DE A TARTALMAT SENKI NEM VÁGTA EL. A panel a teljes törzsét
- * renderelte: 12 soros terminálon a frame 29 sorra hízott, és a FEJLÉC kicsúszott
- * — vagyis a UI ÁLLÍTOTTA a csonkolást, ami nem történt meg. Ez ugyanaz a
- * hibaosztály, mint a hazug status-sor: a legrosszabb fajta, mert a user a
- * jelzésnek hisz.
+ * WHY THIS IS NEEDED (MEASURED BUG, FROM LIVE RENDER): in the first version,
+ * `panelViewport` CORRECTLY returned `panelTruncated: true`, the view even
+ * PRINTED IT ("panel truncated"), BUT NOBODY ACTUALLY CUT THE CONTENT. The
+ * panel rendered its full body: on a 12-row terminal the frame ballooned to
+ * 29 rows, and the HEADER slid out — meaning the UI CLAIMED a truncation
+ * that never happened. This is the same bug class as a lying status line:
+ * the worst kind, because the user trusts the indicator.
  *
- * A CSONKOLÁS EGYSÉGE A MEGJELENÍTETT SOR, NEM A BODY-ELEM. Egy hosszú
- * advice-bekezdés az Ink tördelésében 3-4 sort foglal; elem-számolással a becslés
- * ALULról tévedne, és pont az alul-becslés adja a túllógást. A mérték ugyanaz a
- * `wrapCells`/`displayWidth`, amivel a keret is számol — két különböző mérték
- * (karakter vs. cella) itt garantáltan szétcsúszna.
+ * THE UNIT OF TRUNCATION IS THE DISPLAYED ROW, NOT THE BODY ELEMENT. A long
+ * advice paragraph takes 3-4 rows in Ink's wrapping; counting by element
+ * would UNDER-estimate, and under-estimating is exactly what causes the
+ * overflow. The measure is the same `wrapCells`/`displayWidth` the frame uses
+ * too — two different measures (character vs. cell) here would guaranteed
+ * drift apart.
  *
- * A bemenet `{ text, … }` alakú elemek listája; a `text`-en KÍVÜLI kulcsok
- * (szín, dim, key) érintetlenül mennek vissza a `kept`-ben — a nézet dolga őket
- * Ink-fává alakítani.
+ * The input is a list of `{ text, … }`-shaped items; keys OTHER THAN `text`
+ * (color, dim, key) pass through untouched in `kept` — turning them into an
+ * Ink tree is the view's job.
  */
 export function clipBodyLines(body, { width = 80, maxRows = 0 } = {}) {
   const items = Array.isArray(body) ? body : []
@@ -489,10 +520,10 @@ export function clipBodyLines(body, { width = 80, maxRows = 0 } = {}) {
   const kept = []
   let rows = 0
   for (const item of items) {
-    // A TÖRDELT SOROK SZÁMA. Az üres/whitespace szöveg 1 sort foglal (az Ink egy
-    // üres Textet is kirajzol), a `wrapCells` viszont üres listát ad rá — ezért a
-    // padló 1. Enélkül a panel üres elválasztó sorai "ingyen" lennének, és a
-    // becslés alulról tévedne.
+    // THE NUMBER OF WRAPPED ROWS. Empty/whitespace text takes 1 row (Ink
+    // renders even an empty Text), but `wrapCells` gives an empty list for
+    // it — hence the floor of 1. Without this, the panel's empty separator
+    // rows would be "free", and the estimate would undercount.
     const lines = Math.max(1, wrapCells(String(item?.text ?? ''), w).length)
     if (rows + lines > limit) return { kept, rows, truncated: true }
     kept.push(item)
@@ -502,12 +533,12 @@ export function clipBodyLines(body, { width = 80, maxRows = 0 } = {}) {
 }
 
 /**
- * A lista-ablak KEZDŐ INDEXE úgy, hogy a KURZOR benne legyen.
+ * The STARTING INDEX of the list window such that the CURSOR is inside it.
  *
- * A kurzort KÖZÉPRE célozzuk, majd a tartomány két végéhez CLAMPELJÜK. A
- * "középre + clamp" azért jobb, mint a "csak akkor mozdulj, ha kifutott": a
- * panel megnyitása HIRTELEN csökkenti az ablakot, és a lusta változat ilyenkor a
- * kurzort a szélre szorítaná (nulla kontextus a mozgás irányában).
+ * We aim the cursor at the CENTER, then CLAMP to the two ends of the range.
+ * "Center + clamp" is better than "only move once it's run off": opening the
+ * panel SUDDENLY shrinks the window, and the lazy variant would then pin the
+ * cursor to the edge (zero context in the direction of motion).
  */
 function clampFirst(rowCount, cursor, visible) {
   if (visible <= 0) return 0
@@ -517,86 +548,96 @@ function clampFirst(rowCount, cursor, visible) {
   return Math.min(maxFirst, Math.max(0, centered))
 }
 
-// --- FRICTION: a review-nyom hiánya JELÖLT, de NEM TILTÓ -------------------
+// --- FRICTION: the absence of a review trace is FLAGGED, but NOT BLOCKING --
 //
-// A USER ELVE (szó szerinti indoklással): az approve/merge NEM tiltott
-// review-nyom híján — csak JELÖLT, és a megerősítő szöveg KIMONDJA. Az érv: a
-// "review megléte" csak PROXY (hunk-komment darabszám / lefutott `claude -p`), és
-// egy hard gate arra tanítana, hogy a PROXYT teljesítsük — tokent költenénk
-// hamis attesztációs nyomért. Vannak legitim review-mentes approve-ok
-// (dependabot-bump, docs-tipó), és a `d` (hunk-diff) átnézés NEM hagy nyomot.
+// THE USER'S PRINCIPLE (with the reasoning, verbatim): approve/merge is NOT
+// blocked for lack of a review trace — only FLAGGED, and the confirmation
+// text SAYS SO. The argument: "review having happened" is only a PROXY
+// (hunk-comment count / a `claude -p` run having executed), and a hard gate
+// would teach people to satisfy the PROXY — we'd spend tokens for a fake
+// attestation trace. There are legitimate review-free approves
+// (dependabot-bump, docs typo), and a `d` (hunk-diff) look-through leaves NO
+// trace.
 //
-// AMI VISZONT KÖTELEZŐ: AZ ATTESZTÁCIÓ MONDJON IGAZAT. Ha nem volt nyom,
-// RÖVIDEBB body megy fel, ami NEM állítja, hogy volt review (lásd approveBody).
-// A friction tehát nem a kapuban él, hanem a KIMONDÁSBAN — és a kimondás
-// ellenőrizhető, míg a proxy-kapu kijátszható.
+// WHAT IS MANDATORY, THOUGH: THE ATTESTATION MUST TELL THE TRUTH. If there
+// was no trace, a SHORTER body goes up, one that does NOT claim a review
+// happened (see approveBody). So the friction doesn't live in the gate, it
+// lives in the STATEMENT — and the statement is verifiable, while a proxy
+// gate is gameable.
 
 /**
- * A friction-sorok a megerősítő modálhoz: `{ text, role, color, dim, blocking }`.
+ * The friction lines for the confirmation modal:
+ * `{ text, role, color, dim, blocking }`.
  *
- * A `role` a nézetnek szól (`'notice'` = a jelzés, `'question'` = a tét
- * kimondása); a `blocking` MINDIG false — ez a hard-gate tilalom gépi alakja,
- * tehát egy későbbi refaktor sem tudja "véletlenül" kapuvá tenni anélkül, hogy
- * egy teszt elbukna.
+ * `role` is for the view (`'notice'` = the flag, `'question'` = stating the
+ * stakes); `blocking` is ALWAYS false — this is the mechanical form of the
+ * hard-gate ban, so a later refactor can't "accidentally" turn it into a gate
+ * without a test failing.
  *
- * SZÍNEZÉS (a user 3. elve): a SÁRGA CSAK valódi figyelmeztetésre való (költség,
- * blokkolók). A review-nyom hiánya LEGITIM állapot, nem veszély — tehát dimmelt,
- * nem sárga. A "Megerősíted?" sem virít: a keret alján, dimmelten.
+ * COLORING (the user's 3rd principle): YELLOW is ONLY for a genuine warning
+ * (cost, blockers). A missing review trace is a LEGITIMATE state, not a
+ * danger — so it's dimmed, not yellow. "Confirm?" doesn't stand out either:
+ * at the bottom of the frame, dimmed.
  */
 export function frictionLines({ kind, hasTrace = false, stackOn = null } = {}) {
-  // (wf31/21) A KÉT NOTICE-SOR KIVEZETVE. A user kérése, szó szerint: "Nem kell
-  // ez a szájbarágós szöveg, vedd ki, egyszerűsítsük ezt a kurva appot, annyira
-  // idegesítő a sok sloppy szájbarágós szövegelés."
+  // (wf31/21) THE TWO NOTICE LINES WERE REMOVED. The user's request, verbatim:
+  // "Don't need this spoon-feeding text, take it out, let's simplify this
+  // damn app, all this sloppy spoon-feeding wording is so annoying."
   //
-  // MI VOLT OTT, ÉS MIÉRT REDUNDÁNS:
-  //     Nincs review-nyom ezen a PR-on
-  //     (a `d` átnézés nem hagy nyomot — ha átnézted, ez nem hiba)
-  //     Review-nyom nélkül approve-olsz? [y/N]
-  // A HARMADIK sor ugyanazt a tényt hordozza, mint az első ("review-nyom
-  // nélkül"), a MÁSODIK pedig az implementációnkat magyarázza — arról, hogy a `d`
-  // nem jegyez nyomot, a usernek nem kell tudnia a döntés pillanatában. Három sor
-  // egy tényre.
+  // WHAT WAS THERE, AND WHY IT WAS REDUNDANT:
+  //     No review trace on this PR
+  //     (a `d` look-through leaves no trace — if you looked it over, this isn't an error)
+  //     Approving without a review trace? [y/N]
+  // The THIRD line carries the same fact as the first ("without a review
+  // trace"), and the SECOND explains our implementation — that `d` doesn't
+  // record a trace, which the user doesn't need to know at the moment of the
+  // decision. Three lines for one fact.
   //
-  // AMI MEGMARAD, ÉS MIÉRT ELÉG: a kérdés SZÖVEGE állapotfüggő. Nyom nélkül
-  // `Review-nyom nélkül approve-olsz?`, nyommal `Biztosan approve-olsz?` — a tény
-  // tehát KIMONDVA marad, ott, ahol a döntés is születik. Ez a modul fejében álló
-  // elv ("a friction nem a kapuban él, hanem a KIMONDÁSBAN") SÉRTETLEN: a
-  // kimondás egy sorba került, nem tűnt el.
+  // WHAT STAYS, AND WHY IT'S ENOUGH: the question's TEXT is state-dependent.
+  // Without a trace `Approve without a review trace?`, with a trace `Approve
+  // for sure?` — so the fact stays STATED, right where the decision is made
+  // too. The principle stated at the top of this module ("friction doesn't
+  // live in the gate, it lives in the STATEMENT") stays INTACT: the statement
+  // moved into one line, it didn't disappear.
   //
-  // AZ ATTESZTÁCIÓ SEM VÁLTOZIK: a `approveBody` továbbra is RÖVIDEBB bodyt ad
-  // nyom nélkül (nem állítja, hogy volt review) — az a szerződés a PR
-  // audit-trailjéről szól, nem a UI bőbeszédűségéről.
-  // (wf31/73) A `resolve` SAJÁT KÉRDÉST KAP: itt nem a "review-nyom" a tét (nem a PR-t
-  // minősítjük), hanem hogy AI-t hívunk és kódot íratunk vele. A kérdés ezt mondja ki.
+  // THE ATTESTATION DOESN'T CHANGE EITHER: `approveBody` still gives a
+  // SHORTER body without a trace (doesn't claim a review happened) — that
+  // contract is about the PR's audit trail, not the UI's wordiness.
+  // (wf31/73) `resolve` GETS ITS OWN QUESTION: here the stake isn't the
+  // "review trace" (we're not qualifying the PR), it's that we're calling AI
+  // and having it write code. The question states this.
   if (kind === 'resolve') {
-    // A VISSZATÉRÉSI ALAK UGYANAZ, MINT A TÖBBI ÁGON: sor-leírók TÖMBJE. MÉRT SAJÁT
-    // HIBA volt egy `{text, choices}` objektumot adni — a hívó `.map()`-ot hív a
-    // visszatérési értéken (`...frictionLines(…).map(…)`), ami objektumon
-    // TypeError-t dobna. A választásokat nem itt hirdetjük: azt a `MODAL_CHOICE_KINDS`
-    // és a labelc adja, ugyanabból a forrásból, mint az approve/merge esetén.
+    // THE RETURN SHAPE IS THE SAME AS ON THE OTHER BRANCHES: an ARRAY of line
+    // descriptors. MEASURED OWN BUG: returning a `{text, choices}` object —
+    // the caller calls `.map()` on the return value
+    // (`...frictionLines(…).map(…)`), which would throw a TypeError on an
+    // object. We don't advertise the choices here: `MODAL_CHOICE_KINDS` and
+    // the labels provide that, from the same source as approve/merge.
     //
-    // A CÉL A PARAMÉTERBŐL, NEM egy scope-on kívüli `confirm`-ból: ez a függvény
-    // CSAK a kind-ot és a nyom-tényt kapja (tiszta, tesztelhető) — a hívó adja át.
-    // Hiányzó célnál a kérdés általános marad, nem hazudik számot.
+    // THE TARGET COMES FROM THE PARAMETER, NOT from a `confirm` outside this
+    // scope: this function receives ONLY the kind and the trace fact (pure,
+    // testable) — the caller passes it in. With a missing target the question
+    // stays general, it doesn't lie about a number.
     return [{
       text: stackOn === null
-        ? 'AI-feloldás a culprittal? (token-költés; a feloldott kód egy eldobható worktree-ben marad)'
-        : `AI-feloldás a #${stackOn} culprittal? (token-költés; a feloldott kód egy eldobható worktree-ben marad)`,
+        ? 'AI resolution with the culprit? (spends tokens; the resolved code stays in a disposable worktree)'
+        : `AI resolution with the #${stackOn} culprit? (spends tokens; the resolved code stays in a disposable worktree)`,
       role: 'question',
       dim: true,
       blocking: false,
     }]
   }
-  const stake = kind === 'merge' ? 'landolsz' : 'approve-olsz'
+  const stake = kind === 'merge' ? 'Land' : 'Approve'
   return [{
     text: hasTrace
-      // (wf31/69) A `[y/N]` HINT KIESETT — a user lelete: "magyarul van az igen/nem,
-      // miközben a keyboard hint y/N". A kérdés alatt ott a VIZUÁLIS választó
-      // (`▸ Nem   Igen`), a billentyűket pedig a lábléc sorolja — a sor végi
-      // angol hint így egyszerre volt duplikáció és nyelvi törés a magyar
-      // mondatban. A `y`/`n` gyorsbillentyű VÁLTOZATLANUL él (a lábléc hirdeti).
-      ? `Biztosan ${stake}?`
-      : `Review-nyom nélkül ${stake}?`,
+      // (wf31/69) THE `[y/N]` HINT WAS DROPPED — the user's finding: "it's
+      // Hungarian for yes/no, while the keyboard hint is y/N." Below the
+      // question sits the VISUAL chooser (`▸ No   Yes`), and the footer lists
+      // the keys — so the trailing English hint was at once a duplication and
+      // a language break in the Hungarian sentence. The `y`/`n` shortcut is
+      // STILL live UNCHANGED (the footer advertises it).
+      ? `${stake} for sure?`
+      : `${stake} without a review trace?`,
     role: 'question',
     color: undefined,
     dim: true,
@@ -605,24 +646,27 @@ export function frictionLines({ kind, hasTrace = false, stackOn = null } = {}) {
 }
 
 /**
- * AZ ATTESZTÁCIÓS BODY az approve-hoz — KÉT ÁG, és a nyom nélküli NEM ÁLLÍT
- * átnézést.
+ * THE ATTESTATION BODY for approve — TWO BRANCHES, and the trace-less one
+ * does NOT claim a review.
  *
- * MIÉRT KELL EZ A TUI-BAN (és miért nem elég a bash defaultja): a
- * `bin/tuipr.sh` `cmd_approve`-ja `--body` nélkül a
- *   "Reviewed in next queue session <dátum> — next @ <sha>"
- * szöveget teszi fel. Ez ÁLLÍTJA, hogy volt review. Review-nyom nélkül ez
- * HAZUGSÁG a PR audit-trailjében — és a user 1. elvének a magja pontosan ez: a
- * friction azért nem hard gate, mert az ATTESZTÁCIÓNAK kell igazat mondania, nem
- * a kapunak kikényszerítenie a nyomot. A TUI ezért EXPLICIT `--body`-t ad.
+ * WHY THIS IS NEEDED IN THE TUI (and why the bash default isn't enough):
+ * `bin/tuipr.sh`'s `cmd_approve` without `--body` posts the text
+ *   "Reviewed in next queue session <date> — next @ <sha>"
+ * This CLAIMS a review happened. Without a review trace this is a LIE in the
+ * PR's audit trail — and that's precisely the core of the user's 1st
+ * principle: friction isn't a hard gate because the ATTESTATION must tell the
+ * truth, not because the gate must enforce the trace. So the TUI gives an
+ * EXPLICIT `--body`.
  *
- * EGY SOR, szándékosan: a body `gh pr review --body <arg>`-ként megy át, egy
- * argumentumban. A több soros szöveg (idézés, escape-elés, `$`-expanzió) ott
- * törékeny, és a `spawnSync` argv-je amúgy sem shell — de a bash-út is
- * ugyanezt a stringet kapja, tehát a legszűkebb szerződéshez tartjuk magunkat.
+ * ONE LINE, deliberately: the body goes through as `gh pr review --body
+ * <arg>`, in a single argument. Multi-line text (quoting, escaping, `$`
+ * expansion) is fragile there, and `spawnSync`'s argv isn't a shell anyway —
+ * but the bash path receives this same string too, so we hold ourselves to
+ * the narrowest contract.
  *
- * A HIÁNYZÓ ADAT NEM SZIVÁROG KI: SHA/dátum nélkül a megfelelő tag KIMARAD, nem
- * `undefined`-ként kerül be — a hamis pontosság rosszabb, mint a hiány.
+ * MISSING DATA DOESN'T LEAK OUT: without SHA/date the corresponding tag is
+ * DROPPED, not inserted as `undefined` — false precision is worse than
+ * absence.
  */
 export function approveBody({ hasTrace = false, traceSources = [], date = null, nextSha = null } = {}) {
   const stamp = []
@@ -630,64 +674,68 @@ export function approveBody({ hasTrace = false, traceSources = [], date = null, 
   if (nextSha) stamp.push(`next @ ${nextSha}`)
   const suffix = stamp.length > 0 ? ` (${stamp.join(' — ')})` : ''
   if (!hasTrace) {
-    // NYOM NÉLKÜL: a body CSAK a gesztust rögzíti, nem a review megtörténtét. A
-    // "Reviewed"/"átnézve" szó SZÁNDÉKOSAN nincs benne — ez a különbség maga az
-    // igaz attesztáció.
-    return `Approve a next queue sessionből${suffix}.`
+    // WITHOUT A TRACE: the body records ONLY the gesture, not that a review
+    // happened. The word "Reviewed" is DELIBERATELY absent — that difference
+    // is itself the honest attestation.
+    return `Approve from a next queue session${suffix}.`
   }
-  // NYOMMAL: a body állítja az átnézést, ÉS megnevezi a PROVENANCE-t. Az AI-út és
-  // a hunk-út MÁS állítás — az összemosás ugyanaz a hibaosztály lenne, amit a
-  // reviewBody `tool` mezője már megszüntetett a findings-review-nál.
+  // WITH A TRACE: the body claims a review, AND names the PROVENANCE. The
+  // AI path and the hunk path are DIFFERENT claims — conflating them would be
+  // the same bug class that `reviewBody`'s `tool` field already eliminated
+  // for the findings review.
   const sources = Array.isArray(traceSources) ? traceSources : []
   const how = sources.includes('ai')
     ? sources.includes('hunk')
       ? 'claude -p AI-review + hunk inline review'
       : 'claude -p AI-review'
     : 'hunk inline review'
-  return `Átnézve a next queue sessionben — ${how}${suffix}.`
+  return `Reviewed in a next queue session — ${how}${suffix}.`
 }
 
 /**
- * A PANEL LÁBLÉCE (footer): a VEZÉRLÉS A KERET ALJÁN, DIMMELVE.
+ * THE PANEL'S FOOTER: THE CONTROLS AT THE BOTTOM OF THE FRAME, DIMMED.
  *
- * A user 3. elve: "`y/N`, budget-sor, review-út-választó DIMMELVE a dialógus
- * alján; a sárga CSAK valódi figyelmeztetésre. A tartalmi terület kapja a
- * hangsúlyt." Ezért a visszatérés `{ text, dim }` — a `dim` a SZERZŐDÉS része,
- * nem a nézet szabadsága.
+ * The user's 3rd principle: "`y/N`, budget line, review-path chooser DIMMED
+ * at the bottom of the dialog; yellow ONLY for a genuine warning. The content
+ * area gets the emphasis." Hence the return is `{ text, dim }` — `dim` is
+ * part of the CONTRACT, not the view's discretion.
  *
- * A SORREND szándékos: elöl a DÖNTÉS kulcsai, hátul a zárás. Ha a `clampCells`
- * szűk terminálon vág, a döntés kulcsai maradnak meg — egy lábléc, amiről nem
- * látszik, hogyan mondunk igent, használhatatlan (ugyanaz az elv, mint az
- * overlayFooter-ben; itt a panel-módokra alkalmazva).
+ * THE ORDER is deliberate: DECISION keys up front, closing at the back. If
+ * `clampCells` cuts on a narrow terminal, the decision keys survive — a
+ * footer that doesn't show how to say yes is useless (same principle as in
+ * `overlayFooter`; applied here to the panel modes).
  */
-// (1c) A DEFAULT rLabel a RÖVID alak. MIÉRT NEM MARADHAT a hosszú: ha a hívó
-// nem ad át címkét (régi hívási út, teszt), a lábléc a HOSSZÚ alakra esne vissza,
-// és a panel MÁST hirdetne ugyanarra a kulcsra, mint a globális lábléc — pont az
-// a három-forrásból-szétcsúszás, amit ez a modul fejében kimondott elv tilt.
-// A `rKeyLabel`-t NEM hívhatjuk ide (az az ai-review-view rétegben lakik, ami
-// FELETTE van a panelnek: azonnali ciklus lenne, amit a checker gépileg tilt),
-// ezért a default egy literál — a wording-teszt köti össze a kettőt.
+// (1c) THE DEFAULT rLabel IS THE SHORT FORM. WHY THE LONG ONE CAN'T STAY: if
+// the caller doesn't pass a label (an old call path, a test), the footer
+// would fall back to the LONG form, and the panel would advertise something
+// DIFFERENT for the same key than the global footer — exactly the
+// three-source drift this module's stated principle forbids. We can't call
+// `rKeyLabel` here (it lives in the ai-review-view layer, which is ABOVE the
+// panel: it would be an immediate cycle, which the checker forbids
+// mechanically), so the default is a literal — the wording test ties the two
+// together.
 /**
  * @param {object} [opts]
- * @param {string} [opts.rLabel] az `r` ÁLLAPOTFÜGGŐ címkéje (lásd lentebb)
- * @param {boolean} [opts.canUpload] (wf31/17) VAN-E MIT FELTÖLTENI. `false` esetén
- *   az `f` szegmens KIESIK a láblécből.
+ * @param {string} [opts.rLabel] `r`'s STATE-DEPENDENT label (see below)
+ * @param {boolean} [opts.canUpload] (wf31/17) IS THERE ANYTHING TO UPLOAD.
+ *   When `false`, the `f` segment DROPS OUT of the footer.
  *
- *   A USER LELETE, szó szerint: "»review feltöltése« parancs nem lehetséges, amíg
- *   nincs review."
+ *   THE USER'S FINDING, verbatim: "the 'upload review' command shouldn't be
+ *   possible while there's no review."
  *
- *   A HIBAOSZTÁLY UGYANAZ, amit ez a modul KÉT helyen már kimond: a `↑/↓` csak
- *   ott hirdetve, ahol van mit választani ("egy hirdetett, de nem működő nyíl
- *   DEAD KEY"), és a `panelKeys` fejében ugyanez ("a user nem tudta, a gomb
- *   rossz-e vagy a UI fagyott le"). Az `f` review nélkül pontosan ilyen dead key
- *   volt: a modál megnyílt, a `doUpload` pedig egy hangos hibával elhasalt —
- *   holott a művelet ELVBŐL nem volt lehetséges.
+ *   THE SAME BUG CLASS this module already states in TWO places: `↑/↓`
+ *   advertised only where there's something to choose ("an advertised but
+ *   non-functional arrow is a DEAD KEY"), and the same in `panelKeys`'s
+ *   header ("the user couldn't tell if the button was broken or the UI had
+ *   frozen"). `f` without a review was exactly this kind of dead key: the
+ *   modal opened, and `doUpload` crashed with a loud error — when the action
+ *   was never possible in principle.
  *
- *   A DEFAULT `true`, NEM `false`: a régi hívási utak (és a wording-tesztek) a
- *   harmadik paramétert nem adják át, és egy `false` default NÉMÁN elvinné az `f`-et
- *   MINDENHONNAN — a hiányzó opció pedig sokkal nehezebben észrevehető, mint egy
- *   fölöslegesen hirdetett. A hívó (App) MÉRI a feltölthetőséget, és explicit
- *   `false`-t ad, ha nincs.
+ *   THE DEFAULT IS `true`, NOT `false`: the old call paths (and the wording
+ *   tests) don't pass the third parameter, and a `false` default would
+ *   SILENTLY take `f` away EVERYWHERE — and a missing option is much harder
+ *   to notice than a needlessly advertised one. The caller (App) MEASURES
+ *   uploadability and passes explicit `false` when there isn't any.
  */
 export function panelFooter(st, columns = 120, { rLabel = 'r: review', canUpload = true, stackLabel = '' } = {}) {
   const limit = Math.max(1, Math.floor(Number(columns) || 1))
@@ -695,66 +743,75 @@ export function panelFooter(st, columns = 120, { rLabel = 'r: review', canUpload
   if (st.mode === 'modal') {
     const denied = (st.modal?.blockers?.length ?? 0) > 0
     if (denied) {
-      return { text: clampCells('bármely gomb: vissza — a művelet blokkolva van', limit), dim: true }
+      return { text: clampCells('any key: back — the action is blocked', limit), dim: true }
     }
-    // A `↑/↓` CSAK ott, ahol VAN mit választani (lásd MODAL_CHOICE_KINDS): egy
-    // hirdetett, de nem működő nyíl DEAD KEY — mért hiba volt az `f` modálján.
-    const parts = ['y/N: döntés']
-    // (wf31/69) `←/→`, NEM `↑/↓` — A MEGJELENÍTÉS IRÁNYÁHOZ IGAZÍTVA.
+    // `↑/↓` ONLY where there IS something to choose (see MODAL_CHOICE_KINDS):
+    // an advertised but non-functional arrow is a DEAD KEY — a measured bug on
+    // the `f` modal.
+    const parts = ['y/N: choice']
+    // (wf31/69) `←/→`, NOT `↑/↓` — MATCHED TO THE DISPLAY DIRECTION.
     //
-    // A user lelete: "nincs jobbra-balra választhatóság, miközben van nyíl
-    // karakter a »Nem« előtt". Jogos: a két választás EGY SORBAN, vízszintesen
-    // áll (`▸ Nem   Igen`), a léptetés viszont fel/le volt — a szem a vízszintes
-    // elrendezést látja, a keze a függőleges nyilat keresi. A kezelő MINDKÉT
-    // irányt elfogadja (a fel/le izommemória nem törik), de a HIRDETÉS a
-    // vízszintes, mert az illeszkedik a képhez.
+    // The user's finding: "no left/right selectability, while there's an
+    // arrow character in front of 'No'". Fair: the two choices sit in ONE
+    // ROW, horizontally (`▸ No   Yes`), but the stepping was up/down — the
+    // eye sees the horizontal layout, the hand reaches for the vertical
+    // arrow. The handler accepts BOTH directions (up/down muscle memory isn't
+    // broken), but the ADVERTISEMENT is horizontal, because that matches the
+    // picture.
     //
-    // AZ ENTER IS KIMONDVA: az hajtja végre a kiválasztott ágat, és eddig sehol
-    // nem szerepelt — egy nyilas választó, aminek a véglegesítése nincs hirdetve,
-    // félkész affordance.
-    if (modalHasChoices(st.modal?.kind)) parts.push('←/→: választás', '⏎: megerősítés')
-    // (wf31/21) `Esc: vissza`, nem `Esc: vissza a panelre` — a user kérése. A
-    // „hová" a képernyőről amúgy is látszik (a panel ott van a modál alatt), és a
-    // többi Esc-címke sem nevezi meg a célt (`Esc: bezárás`, `Esc: vissza`).
-    parts.push('Esc: vissza')
+    // ENTER IS ALSO STATED: it executes the selected branch, and until now it
+    // appeared nowhere — an arrow-key chooser whose finalization isn't
+    // advertised is a half-finished affordance.
+    if (modalHasChoices(st.modal?.kind)) parts.push('←/→: choose', '⏎: confirm')
+    // (wf31/21) `Esc: back`, not `Esc: back to panel` — the user's request.
+    // "Where to" is visible on screen anyway (the panel sits below the
+    // modal), and the other Esc labels don't name the destination either
+    // (`Esc: close`, `Esc: back`).
+    parts.push('Esc: back')
     return { text: clampCells(parts.join(' · '), limit), dim: true }
   }
-  // INLINE: az ÖT AKCIÓ hirdetése — ez a refaktor látható eredménye (a lépések
-  // a panelen belül vannak; a 3. pont a FELTÖLTÉS ajánlatát is ide kéri). A
-  // navigáció és a zárás utána jön: ha vág, az AKCIÓK maradnak, mert a j/k és
-  // az Esc amúgy is muscle memory.
+  // INLINE: advertising the FIVE ACTIONS — this is the refactor's visible
+  // result (the steps are inside the panel; point 3 also asks for the UPLOAD
+  // offer here). Navigation and closing come after: if it cuts, the ACTIONS
+  // survive, because j/k and Esc are muscle memory anyway.
   //
-  // Az `r` címkéje ÁLLAPOTFÜGGŐ (rKeyLabel): a hívó adja át, mert a lábléc-építő
-  // innen nem látja az aiReview state-et — a default a nyugalmi 'r: AI-review'.
-  // (wf31/6) A WORDING: `f: review feltöltése`, nem `f: feltöltés`. A user
-  // lelete, szó szerint: "»feltöltés« nem elég informatív. Legyen »review
-  // feltöltése«." A puszta "feltöltés" nem mondja meg, MI kerül fel — és ez a
-  // gomb egy KÍVÜLRŐL LÁTHATÓ, VISSZAVONHATATLAN akció (a PR-on megjelenik egy
-  // review a user nevében, a szerző értesítést kap), tehát pont itt a legdrágább
-  // a félreértés. A megerősítő modál fejléce (`upload`) ugyanezt mondja.
+  // `r`'s label is STATE-DEPENDENT (rKeyLabel): the caller passes it in,
+  // because the footer builder can't see the aiReview state from here — the
+  // default is the idle-state 'r: AI-review'.
+  // (wf31/6) THE WORDING: `f: upload review`, not `f: upload`. The user's
+  // finding, verbatim: "'upload' isn't informative enough. Should be 'upload
+  // review'." Plain "upload" doesn't say WHAT goes up — and this button is an
+  // EXTERNALLY VISIBLE, IRREVERSIBLE action (a review appears on the PR under
+  // the user's name, the author gets notified), so this is exactly where a
+  // misunderstanding is most expensive. The confirmation modal's heading
+  // (`upload`) says the same thing.
   //
-  // (wf31/5) AZ ÜRES SZEGMENSEK KIESNEK. Futó review alatt az `rLabel` ÜRES (a
-  // `rKeyLabel` `running` ága — lásd az indoklást ott), és egy üres szegmens a
-  // naiv `join(' · ')`-ben LÓGÓ SZEPARÁTOR-PÁRT hagyna (`d: diff ·  · f: …`):
-  // az a keret tipográfiáját is elrontja, és "eltűnt egy opció" érzetet ad.
-  // A szűrés ITT, a BEILLESZTŐBEN él — a `rKeyLabel` csak azt dönti el, VAN-E
-  // címke, azt nem, hogy hogyan fűzzük össze.
-  // (wf31/17) AZ `f` CSAK AKKOR, HA VAN MIT FELTÖLTENI — az üres string a fenti
-  // szűrőn kiesik, ugyanazon a MEGLÉVŐ úton, ahogy a futó review `rLabel`-je is.
-  // (wf31/30) AZ `⏎` IS HIRDETVE: a user kérése ("Enter legyen az infó legendben
-  // is"). A UNICODE JEL (`⏎` U+23CE, 1 cella — MÉRVE), nem a `Enter` szó: a
-  // lábléc a legszűkebb felület, és a jel 5 cellát szabadít fel a szöveges
-  // alakhoz képest. A user kérte így ("Legendben »Enter« helyett Enter karakter
-  // legyen, van neki egy unicode jele").
-  // (wf31/53) A STACKELÉS A MERGE UTÁN, A NAVIGÁCIÓ ELŐTT: az AKCIÓK blokkjának
-  // vége. Csak akkor van címkéje, ha a MÉRÉS ajánlatot adott (`offerStack`) — egy
-  // állandóan hirdetett `s` a PR-ok többségén dead key lenne, és pont azt a
-  // hibaosztályt hozná vissza, amit az `f` feltételessége megszüntetett.
-  // Az üres string a lenti szűrőn kiesik, ugyanazon a MEGLÉVŐ úton.
-  const parts = ['d: diff', rLabel, canUpload ? 'f: review feltöltése' : '', 'a: approve', 'm: merge',
-    stackLabel, 'j/k: sor', '⏎/Esc: bezárás']
+  // (wf31/5) EMPTY SEGMENTS DROP OUT. While a review is running, `rLabel` is
+  // EMPTY (the `running` branch of `rKeyLabel` — see the reasoning there),
+  // and an empty segment in a naive `join(' · ')` would leave a DANGLING
+  // SEPARATOR PAIR (`d: diff ·  · f: …`): that breaks the frame's typography
+  // too, and gives an "an option vanished" feeling. The filtering lives HERE,
+  // at the ASSEMBLY POINT — `rKeyLabel` only decides WHETHER there's a label,
+  // not how we join them.
+  // (wf31/17) `f` ONLY WHEN THERE'S SOMETHING TO UPLOAD — the empty string
+  // drops out on the filter below, the same EXISTING path as the running
+  // review's `rLabel`.
+  // (wf31/30) `⏎` IS ALSO ADVERTISED: the user's request ("Enter should be in
+  // the info legend too"). The UNICODE GLYPH (`⏎` U+23CE, 1 cell — MEASURED),
+  // not the word "Enter": the footer is the narrowest surface, and the glyph
+  // frees up 5 cells compared to the textual form. The user asked for it this
+  // way ("In the legend, instead of 'Enter' there should be the Enter
+  // character, it has a unicode glyph").
+  // (wf31/53) STACKING AFTER MERGE, BEFORE NAVIGATION: the end of the ACTIONS
+  // block. It only gets a label when the MEASUREMENT gave an offer
+  // (`offerStack`) — a permanently advertised `s` would be a dead key on most
+  // PRs, and would bring back exactly the bug class that `f`'s conditionality
+  // eliminated. The empty string drops out on the filter below, the same
+  // EXISTING path.
+  const parts = ['d: diff', rLabel, canUpload ? 'f: upload review' : '', 'a: approve', 'm: merge',
+    stackLabel, 'j/k: row', '⏎/Esc: close']
     .filter((p) => String(p ?? '').trim() !== '')
   return { text: clampCells(parts.join(' · '), limit), dim: true }
 }
 
-// === PANEL-VÉGE =============================================================
+// === END OF PANEL ============================================================

@@ -1,29 +1,31 @@
-// A TERMINÁL VALÓDI SZÍNEINEK KIKÉRDEZÉSE — OSC 10 (előtérszín) + OSC 4 (paletta).
+// QUERYING THE TERMINAL'S ACTUAL COLORS — OSC 10 (foreground) + OSC 4 (palette).
 //
-// (wf31/62) MIÉRT LÉTEZIK: a fade-tween kezdőpontjai eddig TALÁLGATOTT hexek
-// voltak (a téma fehére, a nevesített színek közelítése), és a user két leletet
-// is hozott a tévedésre: a fejléc jobb felső szövege fehérre villant, az
-// "in queue" zöldje pedig nem egyezett a téma "árnyaltabb, zöldes-sárgás"
-// zöldjével. A user kérdése: "ezeket nem lehetne runtime számolni?" — de igen:
-// a terminálok az `OSC 10 ; ? BEL` és `OSC 4 ; <index> ; ? BEL` query-kre a
-// TÉNYLEGES színükkel válaszolnak (`rgb:rrrr/gggg/bbbb` alakban).
+// (wf31/62) WHY THIS EXISTS: the fade-tween's starting points used to be
+// GUESSED hex values (the theme's white, an approximation of the named
+// colors), and the user brought two findings of the guess being wrong: the
+// header's top-right text flashed white, and the "in queue" green didn't
+// match the theme's "more nuanced, greenish-yellow" green. The user's
+// question: "couldn't these be computed at runtime?" — and yes: terminals
+// respond to the `OSC 10 ; ? BEL` and `OSC 4 ; <index> ; ? BEL` queries with
+// their ACTUAL color (in `rgb:rrrr/gggg/bbbb` form).
 //
-// MIÉRT PONT INDÍTÁSKOR, ÉS MIÉRT CSAK AKKOR: a válasz a STDIN-en érkezik.
-// Futó Ink mellett ez az input-úttal ütközne (a wf31/18-20 mérte ki, milyen
-// törékeny az), ezért a kérdezés EGYSZER fut, a `render()` ELŐTT — amikor a
-// stdin-en még senki nem olvas. A színek egy session alatt nem változnak
-// (téma-váltásnál a TUI újraindítása elvárható), tehát az egyszeri mérés elég.
+// WHY EXACTLY AT STARTUP, AND ONLY THEN: the response arrives on STDIN. While
+// Ink is running, this would collide with the input path (wf31/18-20 measured
+// how fragile that is), so the query runs ONCE, BEFORE `render()` — when
+// nobody is reading stdin yet. The colors don't change within a session
+// (a theme switch is expected to restart the TUI), so the one-time
+// measurement is enough.
 //
-// FAIL-SAFE MINDEN ÁGON: nem-TTY, nem válaszoló terminál (timeout), csonka
-// válasz → `null`, és a hívó a beépített közelítésekre esik vissza. A tween
-// kezdőpontja KOZMETIKA — inkább legyen egy hajszállal pontatlan, mint hogy az
-// indítás egy néma terminálon lógjon.
+// FAIL-SAFE ON EVERY BRANCH: non-TTY, a non-responding terminal (timeout),
+// truncated response → `null`, and the caller falls back to the built-in
+// approximations. The tween's starting point is COSMETIC — better to be a
+// hair off than to have startup hang on a silent terminal.
 
 import fs from 'node:fs'
 import process from 'node:process'
 import tty from 'node:tty'
 
-/** Az Ink-ben használt nevesített színek ANSI paletta-indexe (OSC 4-hez). */
+/** The ANSI palette index (for OSC 4) of the named colors used in Ink. */
 const PALETTE_INDEX = {
   red: 1,
   green: 2,
@@ -31,16 +33,16 @@ const PALETTE_INDEX = {
   blue: 4,
   magenta: 5,
   cyan: 6,
-  // Az Ink `gray`-e a BRIGHT BLACK (8) — a chalk így képezi le.
+  // Ink's `gray` is BRIGHT BLACK (8) — that's how chalk maps it.
   gray: 8,
   whiteBright: 15,
 }
 
 /**
- * Az OSC válasz-komponens (1/2/4 hex számjegy) → 8 bites csatorna.
+ * An OSC response component (1/2/4 hex digits) → 8-bit channel.
  *
- * A terminálok tipikusan 16 bitet adnak (`ffff`), de a spec 8 és 4 bitet is
- * enged — a felső bájt/nibble skálázása mindhármat helyesen kezeli.
+ * Terminals typically give 16 bits (`ffff`), but the spec also allows 8 and 4
+ * bits — scaling the top byte/nibble handles all three correctly.
  */
 function channelTo8bit(hex) {
   if (hex.length >= 2) return parseInt(hex.slice(0, 2), 16)
@@ -49,18 +51,20 @@ function channelTo8bit(hex) {
 }
 
 /**
- * A nyers stdin-pufferből kiszedi az OSC 10 / OSC 4 szín-válaszokat.
+ * Extracts the OSC 10 / OSC 4 color responses from the raw stdin buffer.
  *
- * TISZTA függvény (tesztelhető I/O nélkül). A terminátor BEL (`\\x07`) és ST
- * (`ESC \\`) is lehet — terminálonként eltér, a regex egyiket sem követeli meg:
- * a szín-törzs önmagában azonosítható.
+ * A PURE function (testable without I/O). The terminator can be BEL (`\x07`)
+ * or ST (`ESC \`) too — it varies by terminal, and the regex requires
+ * neither: the color body alone is identifiable.
  */
 export function parseOscColorResponses(text) {
   const out = {}
-  // A 11-es a DEFAULT HÁTTÉR (wf31/66) — a lebegő panel opacitásához: az Ink
-  // cella-buffere csak oda ír, ahol karakter van, tehát a panel üres celláit a
-  // TÉMA hátterével kell kitölteni, hogy a lista ne üssön át.
-  // (Az ESC itt is escape, nem literal bájt — lásd az oscColorQueries indoklását.)
+  // 11 is the DEFAULT BACKGROUND (wf31/66) — for the floating panel's
+  // opacity: Ink's cell buffer only writes where there's a character, so the
+  // panel's empty cells need to be filled with the THEME's background so the
+  // list underneath doesn't show through.
+  // (The ESC here is an escape too, not a literal byte — see the reasoning
+  // for oscColorQueries.)
   const re = /\u001B\](10|11|4);(?:(\d+);)?rgb:([0-9a-fA-F]{1,4})\/([0-9a-fA-F]{1,4})\/([0-9a-fA-F]{1,4})/g
   for (const m of String(text).matchAll(re)) {
     const [, code, idx, r, g, b] = m
@@ -77,43 +81,43 @@ export function parseOscColorResponses(text) {
   return out
 }
 
-/** A kiküldendő query-sorozat: fg + a használt paletta-indexek. */
+/** The sequence of queries to send: fg + the palette indexes in use. */
 export function oscColorQueries() {
-  // ESCAPE-EK, NEM LITERAL KONTROL-BÁJTOK: egy diff/editor a láthatatlan ESC-et
-  // csendben elveszítheti, és a query attól még "működne" — csak épp semmit nem
-  // kérdezne. Az escape látható és greppelhető.
+  // ESCAPES, NOT LITERAL CONTROL BYTES: a diff/editor can silently drop an
+  // invisible ESC, and the query would still "work" — it just wouldn't
+  // actually query anything. An escape is visible and greppable.
   const parts = ['\u001B]10;?\u0007', '\u001B]11;?\u0007']
   for (const idx of Object.values(PALETTE_INDEX)) parts.push(`\u001B]4;${idx};?\u0007`)
   return parts.join('')
 }
 
-/** Hány választ várunk összesen (fg + bg + paletta) — a korai kilépéshez. */
+/** How many responses we expect in total (fg + bg + palette) — for early exit. */
 const EXPECTED_KEYS = 2 + Object.keys(PALETTE_INDEX).length
 
 /**
- * A terminál színeinek egyszeri kikérdezése. `null`, ha nem mérhető.
+ * A one-time query of the terminal's colors. `null` if it can't be measured.
  *
- * (wf31/63) SAJÁT `/dev/tty` FD-RŐL OLVASUNK, NEM A `process.stdin`-RŐL — MÉRT
- * SAJÁT HIBA JAVÍTÁSA. Az első változat a stdin-t `resume()`-olta, és az app
- * INDULÁSKOR LEFAGYOTT (a user lelete). Az ok a projekt által már kimért
- * libuv-korlát (wf26/wf32, libuv#982): a `resume()` egy BLOKKOLÓ natív
- * `read()`-et indít az fd 0-n, amit a `pause()` NEM tud visszavonni — a függő
- * olvasás ott marad, és elviszi/blokkolja az inputot, amire az Ink-nek (a
- * `DelegatingStdin` targetjének) szüksége lenne.
+ * (wf31/63) WE READ FROM OUR OWN `/dev/tty` FD, NOT FROM `process.stdin` —
+ * FIXING A MEASURED BUG OF OUR OWN. The first version called `resume()` on
+ * stdin, and the app FROZE ON STARTUP (the user's finding). The cause is a
+ * libuv limitation the project had already measured before (wf26/wf32,
+ * libuv#982): `resume()` starts a BLOCKING native `read()` on fd 0, which
+ * `pause()` CANNOT undo — the pending read stays there, and it takes over/
+ * blocks the input that Ink (the `DelegatingStdin`'s target) needs.
  *
- * A MEGOLDÁS UGYANAZ A MINTA, AMIT A wf32 A HUNK-VÁLTÁSNÁL MÉRT KI: egy SAJÁT
- * fd-t nyitunk a `/dev/tty`-ra, és a végén a stream `destroy()`-a — ami az fd-t
- * ZÁRJA — a függő blokkoló olvasást is megszakítja. A `process.stdin`-hez így
- * hozzá sem érünk.
+ * THE FIX IS THE SAME PATTERN wf32 MEASURED OUT FOR THE HUNK SWITCH: we open
+ * OUR OWN fd onto `/dev/tty`, and at the end the stream's `destroy()` — which
+ * CLOSES the fd — also interrupts the pending blocking read. We never even
+ * touch `process.stdin` this way.
  *
- * A TIMEOUT-ÁG MARADÉK-KOCKÁZATA VÁLTOZATLAN (egy nagyon lassú terminál a
- * lezárás után válaszol, és a bájtok az Ink inputjába esnek) — részleges válasz
- * után ezért egy rövid csend-ablakot még kivárunk.
+ * THE TIMEOUT BRANCH'S RESIDUAL RISK IS UNCHANGED (a very slow terminal
+ * responds after we've closed, and the bytes fall into Ink's input) — after a
+ * partial response we therefore still wait out a short quiet window.
  */
 export function queryTerminalColors({
   output = process.stdout,
   timeoutMs = Number(process.env.TUIPR_NEXT_TUI_COLOR_TIMEOUT_MS) || 80,
-  // Tesztekhez injektálható stream-gyár; élesben a /dev/tty-t nyitja.
+  // Injectable stream factory for tests; in production it opens /dev/tty.
   openInput = () => {
     const fd = fs.openSync('/dev/tty', 'r')
     return new tty.ReadStream(fd)
@@ -128,7 +132,7 @@ export function queryTerminalColors({
     try {
       input = openInput()
     } catch {
-      // Nincs vezérlő terminál (pl. detached processz) — nem mérhető.
+      // No controlling terminal (e.g. a detached process) — not measurable.
       resolve(null)
       return
     }
@@ -138,18 +142,19 @@ export function queryTerminalColors({
       if (settled) return
       settled = true
       clearTimeout(timer)
-      // (indulási-fagyás) HÁROM KÜLÖN try, NEM EGY KÖZÖS: egy élő fagyott
-      // példány fd-táblája mutatta meg (lsof: a /dev/tty fd-k NYITVA maradtak,
-      // 225 bájtnyi beolvasott válasszal), hogy a lezárás valamelyik korai
-      // lépése dobhat — közös try-ban az a `destroy()`-t is elnyeli, és az
-      // olvasó örökre ott marad a KÖZÖS terminál-eszközön. A destroy-nak
-      // minden korábbi hibától függetlenül le kell futnia.
-      try { input.removeListener('data', onData) } catch { /* lásd fent */ }
-      // A RAW VISSZA, MAJD DESTROY: a destroy zárja az fd-t, ami a függő
-      // blokkoló olvasást is megszakítja (a wf32-ben mért tulajdonság — a
-      // `destroyOldTarget()` pontosan erre épül).
-      try { input.setRawMode?.(false) } catch { /* lásd fent */ }
-      try { input.destroy() } catch { /* a lezárás hibája nem ronthatja el az indítást */ }
+      // (startup freeze) THREE SEPARATE trys, NOT ONE SHARED: a live frozen
+      // instance's fd table showed (lsof: the /dev/tty fds stayed OPEN, with
+      // 225 bytes of response already read) that some early step of the
+      // teardown can throw — in a shared try that would swallow the
+      // `destroy()` too, and the reader would stay stuck forever on the
+      // SHARED terminal device. `destroy` must run regardless of any earlier
+      // error.
+      try { input.removeListener('data', onData) } catch { /* see above */ }
+      // RAW MODE OFF FIRST, THEN DESTROY: destroy closes the fd, which also
+      // interrupts the pending blocking read (the property measured in
+      // wf32 — `destroyOldTarget()` relies on exactly this).
+      try { input.setRawMode?.(false) } catch { /* see above */ }
+      try { input.destroy() } catch { /* a teardown error must not break startup */ }
       const parsed = parseOscColorResponses(buf)
       resolve(Object.keys(parsed).length > 0 ? parsed : null)
     }
@@ -160,16 +165,17 @@ export function queryTerminalColors({
       if (got >= EXPECTED_KEYS) {
         finish()
       } else if (got > 0) {
-        // RÉSZLEGES válasz: a terminál beszél, csak lassan — a csend-ablak
-        // újraindul, hogy a maradék ne az Ink inputjába folyjon.
+        // PARTIAL response: the terminal is talking, just slowly — restart
+        // the quiet window so the rest doesn't flow into Ink's input.
         clearTimeout(timer)
         timer = setTimeout(finish, 40)
       }
     }
     try {
-      // RAW MÓD: a válasz ne érjen el a sor-pufferig/echo-ig. A saját fd-nk
-      // termios-a a KÖZÖS tty-eszközé, de az Ink indításkor úgyis raw-ra állítja
-      // a sajátját — a finish-beli visszaállítás csak a köztes ablakot fedi.
+      // RAW MODE: the response shouldn't reach line buffering/echo. Our own
+      // fd's termios belongs to the SHARED tty device, but Ink sets its own
+      // to raw on startup anyway — the restore in finish only covers the
+      // window in between.
       input.setRawMode?.(true)
       input.on('data', onData)
       output.write(oscColorQueries())

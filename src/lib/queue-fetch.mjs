@@ -1,30 +1,33 @@
-// tuipr — QUEUE-FETCH: az adatforrás-hívások (BESZERZÉS).
+// tuipr — QUEUE-FETCH: the data-source calls (ACQUISITION).
 //
-// Ami itt lakik: a queue (sync + async), a PR-refek fetchelése és a PR-fájlok
-// mérete. KÜLÖN a diagnosis-tól, mert az az ÉRTELMEZÉS, ez a BESZERZÉS.
+// What lives here: the queue (sync + async), fetching PR refs, and PR-file
+// size. SEPARATE from diagnosis, because that's INTERPRETATION, this is
+// ACQUISITION.
 //
-// RÉTEGREND: lefelé importál (proc: spawn-diagnózis, NEXT_SH, spawnCollect).
-// SEMMIT nem importál a core-ból vagy felette.
+// LAYER ORDER: imports downward (proc: spawn diagnosis, NEXT_SH,
+// spawnCollect). Imports NOTHING from core or above.
 //
-// KÖZÖS ELV MINDEN HÍVÁSON: a spawn-HIBA (ENOENT) és a NEM-NULLA EXIT külön
-// diagnózist kap, és a hiba DOBÓDIK — egy néma üres lista a hívót arra vezetné,
-// hogy "nincs adat", holott a szerződés bukott el.
+// ONE PRINCIPLE ACROSS EVERY CALL: a spawn ERROR (ENOENT) and a NON-ZERO EXIT
+// each get their own diagnosis, and the error is THROWN — a silently empty
+// list would lead the caller to conclude "no data", when in fact the contract
+// failed.
 //
-// --- A PROVIDER-VÁLASZTÁS ---------------------------------------------------
+// --- PROVIDER SELECTION ------------------------------------------------------
 //
-// A queue-modell egy SZERZŐDÉS, nem egy implementáció: a fölötte lévő rétegek
-// megjelenítik, sosem számolják újra. Ezért itt CSAK az dől el, KI állítja elő.
+// The queue model is a CONTRACT, not an implementation: the layers above it
+// display it, they never recompute it. So here we only decide WHO produces
+// it.
 //
-// Az alapértelmezett a `providers/github.mjs` — csak `gh`-t és `git`-et
-// használ, tehát bármelyik repón fut. A `TUIPR_QUEUE_CMD` egy KÜLSŐ providert
-// köt be a helyére: bármilyen parancs, ami a szerződés szerinti JSON-t írja a
-// stdoutra. Így a gazdagabb, MÉRÉSEN alapuló modell (conflict-diagnózis,
-// tranzitív stackelés) a TUI módosítása nélkül visszatehető.
+// The default is `providers/github.mjs` — it only uses `gh` and `git`, so it
+// runs on any repo. `TUIPR_QUEUE_CMD` wires in an EXTERNAL provider instead:
+// any command that writes JSON matching the contract to stdout. That way, the
+// richer, MEASUREMENT-based model (conflict diagnosis, transitive stacking)
+// can be plugged back in without modifying the TUI.
 import { spawnCollect, spawnFailure } from './proc.mjs'
 import { fetchQueue as ghFetchQueue, fetchQueueAsync as ghFetchQueueAsync } from './providers/github.mjs'
 import { spawnSync } from 'node:child_process'
 
-/** A külső provider parancsa, szavakra bontva — vagy `null`, ha nincs beállítva. */
+/** The external provider's command, split into words — or `null` if none is configured. */
 function externalProvider() {
   const raw = process.env.TUIPR_QUEUE_CMD?.trim()
   if (!raw) return null
@@ -32,17 +35,17 @@ function externalProvider() {
   return { cmd: parts[0], args: parts.slice(1) }
 }
 
-/** A külső provider kimenetének EGYETLEN parse-olója (sync + async közös mag). */
+/** The SINGLE parser for the external provider's output (shared core of sync + async). */
 function parseQueueResult(res, tool) {
   const spawnErr = spawnFailure(res, tool)
-  if (spawnErr) throw new Error(`a queue nem kérdezhető le: ${spawnErr}`)
+  if (spawnErr) throw new Error(`the queue cannot be queried: ${spawnErr}`)
   if (res.status !== 0) {
-    throw new Error(`queue --json hiba (exit ${res.status}): ${(res.stderr || res.stdout || '').trim() || '(nincs kimenet)'}`)
+    throw new Error(`queue --json error (exit ${res.status}): ${(res.stderr || res.stdout || '').trim() || '(no output)'}`)
   }
   return JSON.parse(res.stdout)
 }
 
-/** A queue-modell — a beállított provider szerint. */
+/** The queue model — per the configured provider. */
 export function fetchQueue() {
   const ext = externalProvider()
   if (!ext) return ghFetchQueue()
@@ -50,8 +53,9 @@ export function fetchQueue() {
 }
 
 /**
- * A fetchQueue ASZINKRON párja — BÁJTRA ugyanaz a szerződés (alak, hibaszöveg),
- * csak az event loop marad szabad. A hunk-zárás utáni háttér-reload útja (5/2).
+ * The ASYNC counterpart of fetchQueue — BYTE-FOR-BYTE the same contract
+ * (shape, error text), only the event loop stays free. The background-reload
+ * path after a hunk close (5/2).
  */
 export async function fetchQueueAsync() {
   const ext = externalProvider()
@@ -61,48 +65,51 @@ export async function fetchQueueAsync() {
 
 
 /**
- * A PR head branch fetchelése egy lokális ref alá, hogy a hunk valódi
- * git-range-et lásson (a `gh pr diff | hunk patch -` úttal szemben ez adja a
- * fájl-szintű navigációt és a hunk-anchorokat).
- * Visszatér: [baseRef, headRef].
+ * Fetching the PR's head branch into a local ref, so hunk sees an actual
+ * git range (this gives file-level navigation and hunk anchors, unlike the
+ * `gh pr diff | hunk patch -` path).
+ * Returns: [baseRef, headRef].
  */
 export function fetchPrRefs(pr, remote = 'origin') {
   const ref = `refs/tuipr/pr/${pr}`
   const fetched = spawnSync('git', ['fetch', '-q', remote, `pull/${pr}/head:${ref}`], { encoding: 'utf8' })
   const fetchSpawnErr = spawnFailure(fetched, 'git')
-  if (fetchSpawnErr) throw new Error(`a #${pr} fetchelése nem indítható: ${fetchSpawnErr}`)
+  if (fetchSpawnErr) throw new Error(`cannot start fetching #${pr}: ${fetchSpawnErr}`)
   if (fetched.status !== 0) {
-    // A stderr-t NEM interpoláljuk nyersen: spawn-hibán `undefined` lenne, és a
-    // user egy "nem sikerült: undefined" sort kapna.
-    throw new Error(`a #${pr} fetchelése nem sikerült (exit ${fetched.status}): ${(fetched.stderr || '').trim() || '(nincs stderr)'}`)
+    // We do NOT interpolate stderr raw: on a spawn error it would be
+    // `undefined`, and the user would get a "failed: undefined" line.
+    throw new Error(`fetching #${pr} failed (exit ${fetched.status}): ${(fetched.stderr || '').trim() || '(no stderr)'}`)
   }
-  // A base-ref NEM eshet vissza némán 'main'-re. Stacked PR-nál a valódi base
-  // egy MÁSIK PR head branche; ha egy tranziens gh-hiba (auth, rate limit,
-  // részleges GraphQL válasz) után 'main'-t találgatnánk, a reviewer az
-  // origin/main...head diffet kapná, ami a TALAPZAT-PR commitjait IS
-  // tartalmazza — tehát nem azt a PR-t reviewolná, amit hisz, majd
-  // approve-olná. A találgatás itt rosszabb, mint a hangos bukás.
+  // The base ref must NOT silently fall back to 'main'. For a stacked PR, the
+  // real base is ANOTHER PR's head branch; if we guessed 'main' after a
+  // transient gh error (auth, rate limit, partial GraphQL response), the
+  // reviewer would get the origin/main...head diff, which ALSO includes the
+  // BASE PR's commits — so they'd end up reviewing (and then approving) a
+  // different PR than the one they think they are. Guessing here is worse
+  // than a loud failure.
   const baseJson = spawnSync('gh', ['pr', 'view', String(pr), '--json', 'baseRefName', '--jq', '.baseRefName'], { encoding: 'utf8' })
   const baseSpawnErr = spawnFailure(baseJson, 'gh')
-  if (baseSpawnErr) throw new Error(`a #${pr} base branch-e nem kérdezhető le: ${baseSpawnErr}`)
+  if (baseSpawnErr) throw new Error(`cannot query #${pr}'s base branch: ${baseSpawnErr}`)
   if (baseJson.status !== 0) {
-    throw new Error(`a #${pr} base branch-ének lekérése nem sikerült: ${(baseJson.stderr || '').trim() || `gh exit ${baseJson.status}`}`)
+    throw new Error(`fetching #${pr}'s base branch failed: ${(baseJson.stderr || '').trim() || `gh exit ${baseJson.status}`}`)
   }
   const base = (baseJson.stdout || '').trim()
-  if (!base) throw new Error(`a #${pr} base branch-e üresen jött vissza a gh-tól — a base nem találgatható`)
+  if (!base) throw new Error(`#${pr}'s base branch came back empty from gh — the base cannot be guessed`)
   return [`${remote}/${base}`, ref]
 }
 
 /**
- * A PR fájl-listája mérettel (`gh pr view --json files`) — a megerősítő ekrán
- * ebből számol fájlszámot, +/- sorokat és scope-ot.
+ * The PR's file list with sizes (`gh pr view --json files`) — the
+ * confirmation screen computes the file count, +/- lines, and scope from
+ * this.
  *
- * Miért nem a `queue --json`-ból: az a modell szándékosan nem tartalmaz
- * méret-adatot (fájlonkénti additions/deletions), és nem is akarjuk oda betenni
- * — csak az AI-review-nak kell, PR-onként egyszer, on-demand.
+ * Why not from `queue --json`: that model deliberately carries no size data
+ * (per-file additions/deletions), and we don't want to put it there either —
+ * only the AI review needs it, once per PR, on demand.
  *
- * A hiba DOBÓDIK: egy néma üres fájl-lista a megerősítő ekrán "0 fájl, +0/-0"
- * képét adná, amiről a fejlesztő azt hinné, a PR triviális — és rábökne az y-ra.
+ * The error is THROWN: a silently empty file list would give the
+ * confirmation screen a "0 files, +0/-0" picture, from which the developer
+ * would think the PR is trivial — and hit y.
  */
 export function fetchPrFiles(pr) {
   const res = spawnSync(
@@ -110,17 +117,17 @@ export function fetchPrFiles(pr) {
     ['pr', 'view', String(pr), '--json', 'files', '--jq', '.files'],
     { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 },
   )
-  // A SPAWN-HIBA ELŐBB, mint az exit-kód: ENOENT-en a status null és a stderr
-  // üres, tehát a lenti ág "gh exit null"-t adott — HAZUG diagnózis (a gh nem
-  // hibás exitet adott, hanem el sem indult).
+  // THE SPAWN ERROR FIRST, before the exit code: on ENOENT, status is null
+  // and stderr is empty, so the branch below would give "gh exit null" — a
+  // LYING diagnosis (gh didn't return a failing exit, it never even started).
   const spawnErr = spawnFailure(res, 'gh')
-  if (spawnErr) throw new Error(`a #${pr} fájl-listája nem kérhető le: ${spawnErr}`)
+  if (spawnErr) throw new Error(`cannot fetch #${pr}'s file list: ${spawnErr}`)
   if (res.status !== 0) {
-    throw new Error(`a #${pr} fájl-listája nem kérhető le: ${(res.stderr || '').trim() || `gh exit ${res.status}`}`)
+    throw new Error(`cannot fetch #${pr}'s file list: ${(res.stderr || '').trim() || `gh exit ${res.status}`}`)
   }
   const text = (res.stdout || '').trim()
-  if (!text) throw new Error(`a #${pr} fájl-listája üresen jött vissza a gh-tól — a PR mérete nem találgatható`)
+  if (!text) throw new Error(`#${pr}'s file list came back empty from gh — the PR's size cannot be guessed`)
   const files = JSON.parse(text)
-  if (!Array.isArray(files)) throw new Error(`a #${pr} fájl-listája nem tömb: ${text.slice(0, 200)}`)
+  if (!Array.isArray(files)) throw new Error(`#${pr}'s file list isn't an array: ${text.slice(0, 200)}`)
   return files.map((f) => ({ path: f.path, additions: f.additions ?? 0, deletions: f.deletions ?? 0 }))
 }

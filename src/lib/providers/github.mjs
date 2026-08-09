@@ -1,29 +1,32 @@
-// tuipr — GITHUB PROVIDER: a queue-modell előállítása `gh`-ból és `git`-ből.
+// tuipr — GITHUB PROVIDER: producing the queue model from `gh` and `git`.
 //
-// EZ A SZERZŐDÉS MÁSIK OLDALA. A TUI a queue-modellt KIZÁRÓLAG megjeleníti — a
-// besorolást, a landolhatóságot és az approve-olhatóságot sosem számolja újra
-// (lásd tui-core.mjs). Az a réteg tehát egy SZERZŐDÉS, nem egy implementáció
-// belügye, és itt van a szerződés egy második megvalósítása: olyan, ami CSAK a
-// `gh`-ra és a `git`-re támaszkodik, semmilyen munkahelyi branch-konvencióra.
+// THIS IS THE OTHER SIDE OF THE CONTRACT. The TUI ONLY DISPLAYS the queue
+// model — it never recomputes the classification, landability, or
+// approvability (see tui-core.mjs). So that layer is a CONTRACT, not an
+// implementation's private business, and here is a second implementation of
+// the contract: one that relies ONLY on `gh` and `git`, with no workplace
+// branch convention.
 //
-// AMIT EZ A PROVIDER SZÁNDÉKOSAN NEM AD:
-//   - `classification` (a conflict-diagnózis numerikus szintje) és `dep` — ezek
-//     MÉRÉSBŐL származnak (merge-tree szimuláció), nem lekérdezésből;
-//   - `stackedOn` / `stackRoot` / `stackDepth` — a stackelés egy integrációs
-//     branch merge-üzeneteiből olvasható ki, ami itt nincs.
-// A fogyasztó ezekre FAIL-SAFE (rows.mjs `depthOf`/`rootOf`): hiányukban lapos,
-// egyszintű lista jön. Ezért NEM hazudunk nullát oda, ahol nincs mérésünk — a
-// hiányzó mező „nem tudjuk", a `0` viszont „megmértük és nincs" lenne.
+// WHAT THIS PROVIDER DELIBERATELY DOES NOT GIVE:
+//   - `classification` (the conflict diagnosis's numeric level) and `dep` —
+//     these come from MEASUREMENT (a merge-tree simulation), not a query;
+//   - `stackedOn` / `stackRoot` / `stackDepth` — stacking is read out of an
+//     integration branch's merge messages, which don't exist here.
+// The consumer is FAIL-SAFE for these (rows.mjs `depthOf`/`rootOf`): in their
+// absence, a flat, single-level list results. So we don't lie a zero into a
+// field we have no measurement for — a missing field means "we don't know",
+// while `0` would mean "we measured it and there's none".
 //
-// RÉTEGREND: lefelé importál (proc: spawn-diagnózis). SEMMIT nem importál a
-// core-ból vagy felette.
+// LAYER ORDER: imports downward (proc: spawn diagnosis). Imports NOTHING
+// from core or above.
 import { spawnCollect, spawnFailure } from '../proc.mjs'
 import { spawnSync } from 'node:child_process'
 
 /**
- * A `gh pr list` mezői. SZŰKEN tartva: minden mező külön GraphQL-munkát jelent
- * a szerveren, és a `files` a legdrágább — azt csak akkor kérjük, ha tényleg
- * kell (a dep-metszet a mérő providerben él, nem itt).
+ * The `gh pr list` fields. Kept NARROW: every field is separate GraphQL work
+ * on the server, and `files` is the most expensive — we only request that
+ * when it's actually needed (the dep intersection lives in the measuring
+ * provider, not here).
  */
 const PR_FIELDS = [
   'number',
@@ -38,37 +41,38 @@ const PR_FIELDS = [
 ].join(',')
 
 /**
- * A besorolás LEKÉRDEZÉSBŐL, nem mérésből — és ezt a különbséget a
- * mezőnevek is hordozzák.
+ * The classification from a QUERY, not a measurement — and the field names
+ * carry that distinction too.
  *
- * MIÉRT NEM ELÉG a `mergeable`: a GitHub `CONFLICTING`/`MERGEABLE`/`UNKNOWN`
- * hármasa a BASE-szel szembeni állapot. Az `UNKNOWN` nem hiba, hanem
- * „a szerver még számol" — ilyenkor a `mergeStateStatus` a beszédesebb, és a
- * kettőt EGYÜTT kell nézni, különben egy épp frissülő PR-t hamisan
- * konfliktusosnak jelentenénk.
+ * WHY `mergeable` ISN'T ENOUGH: GitHub's `CONFLICTING`/`MERGEABLE`/`UNKNOWN`
+ * triad is the state against BASE. `UNKNOWN` isn't an error, it means "the
+ * server is still computing" — in that case `mergeStateStatus` is more
+ * informative, and the two must be looked at TOGETHER, otherwise we'd falsely
+ * report a PR that's still refreshing as conflicting.
  */
 export function classifyPr(pr) {
   if (pr.isDraft) return 'draft'
   if (pr.mergeable === 'CONFLICTING' || pr.mergeStateStatus === 'DIRTY') return 'conflict'
-  // A `BLOCKED` ÖNMAGÁBAN NEM jelent blokkolt PR-t — MÉRT lelet a cli/cli
-  // nyitott PR-jein: ott MINDEGYIK `BLOCKED`, mert a repó kötelező review-t ír
-  // elő, és a review még nincs meg. Ez a REVIEW-RA VÁRÓ, teljesen normális
-  // állapot, azaz pontosan az, amiért ez a tool létezik.
+  // `BLOCKED` ON ITS OWN does NOT mean a blocked PR — a MEASURED finding on
+  // cli/cli's open PRs: there, EVERY ONE is `BLOCKED`, because the repo
+  // mandates review and the review hasn't happened yet. This is the
+  // WAITING-FOR-REVIEW state, completely normal, and exactly the state this
+  // tool exists for.
   //
-  // Ha ezt `blocked`-nak jelentenénk, az EGÉSZ lista ⛔ lenne, és a jelzés nem
-  // különböztetne meg semmit — ugyanaz a hibaosztály, amit a rows.mjs a
-  // mindenhol kitett ⬆️-nál már egyszer kiirtott. Ráadásul a review-állapotot
-  // a SAJÁT oszlopa (rmark) már kimondja, tehát duplikálnánk is.
+  // If we reported this as `blocked`, the WHOLE list would be ⛔, and the
+  // signal wouldn't distinguish anything — the same error class rows.mjs
+  // already eliminated once for the everywhere-shown ⬆️. It would also
+  // duplicate the review state, which already has its OWN column (rmark).
   //
-  // Blokkolt tehát az, amit EMBER állított meg: a kért változtatás.
+  // So blocked means what a HUMAN stopped: the requested change.
   if (pr.reviewDecision === 'CHANGES_REQUESTED') return 'blocked'
   if (pr.mergeStateStatus === 'UNKNOWN' && pr.mergeable === 'UNKNOWN') return 'missing'
   return 'queue'
 }
 
 /**
- * Approve-olható-e ÁLTALUNK. A saját PR-t a GitHub sem engedi jóváhagyni,
- * tehát ezt nem is ajánljuk fel — a fail-closed irány itt a `false`.
+ * Can WE approve it. GitHub doesn't let you approve your own PR either, so we
+ * don't offer it — the fail-closed direction here is `false`.
  */
 export function canApprovePr(pr, viewer) {
   if (pr.isDraft) return false
@@ -79,12 +83,12 @@ export function canApprovePr(pr, viewer) {
 }
 
 /**
- * A repó által ENGEDÉLYEZETT merge-metódus. Egy hívás, mert a válasz a repóra
- * jellemző, nem PR-enként változik.
+ * The merge method ALLOWED by the repo. One call, because the answer is a
+ * repo property, it doesn't vary per PR.
  *
- * FAIL-SOFT, SZÁNDÉKOSAN: ha a lekérdezés nem megy (jogosultság, offline), a
- * `merge`-öt adjuk vissza — az a GitHub alapértelmezése is. Egy nem-kritikus
- * kiegészítő mező miatt a TELJES listát megtagadni aránytalan lenne.
+ * FAIL-SOFT, DELIBERATELY: if the query fails (permissions, offline), we
+ * return `merge` — that's GitHub's default too. Denying the WHOLE list over a
+ * non-critical supplementary field would be disproportionate.
  */
 function repoMergeMethod() {
   const res = spawnSync(
@@ -104,7 +108,7 @@ function repoMergeMethod() {
   return 'merge'
 }
 
-/** A bejelentkezett felhasználó login-neve, vagy `null`, ha nem megállapítható. */
+/** The logged-in user's login name, or `null` if it can't be determined. */
 function viewerLogin() {
   const res = spawnSync('gh', ['api', 'user', '--jq', '.login'], { encoding: 'utf8' })
   if (spawnFailure(res, 'gh') || res.status !== 0) return null
@@ -112,28 +116,28 @@ function viewerLogin() {
 }
 
 /**
- * A `gh pr list --json` kimenetének EGYETLEN parse-olója — a szinkron és az
- * aszinkron út közös magja.
+ * The SINGLE parser for `gh pr list --json` output — the shared core of the
+ * sync and async paths.
  *
- * A HIBA DOBÓDIK, nem nyelődik el: egy néma üres lista a hívót arra vezetné,
- * hogy „nincs nyitott PR", holott a szerződés bukott el. Ez ugyanaz az elv,
- * ami az eredeti provider minden hívásán érvényes volt.
+ * THE ERROR IS THROWN, not swallowed: a silently empty list would lead the
+ * caller to conclude "no open PRs", when in fact the contract failed. This is
+ * the same principle that applied to every call in the original provider.
  */
 function parsePrList(res) {
   const spawnErr = spawnFailure(res, 'gh')
-  if (spawnErr) throw new Error(`a PR-lista nem kérdezhető le: ${spawnErr}`)
+  if (spawnErr) throw new Error(`the PR list cannot be queried: ${spawnErr}`)
   if (res.status !== 0) {
-    const detail = (res.stderr || res.stdout || '').trim() || '(nincs kimenet)'
-    throw new Error(`gh pr list hiba (exit ${res.status}): ${detail}`)
+    const detail = (res.stderr || res.stdout || '').trim() || '(no output)'
+    throw new Error(`gh pr list error (exit ${res.status}): ${detail}`)
   }
   try {
     return JSON.parse(res.stdout)
   } catch (err) {
-    throw new Error(`a gh pr list kimenete nem JSON: ${err.message}`)
+    throw new Error(`gh pr list output isn't JSON: ${err.message}`)
   }
 }
 
-/** Nyers `gh`-PR → queue-modell sor. */
+/** Raw `gh` PR → queue-model row. */
 export function toQueueRow(pr, { viewer, mergeMethod }) {
   return {
     number: pr.number,
@@ -154,11 +158,12 @@ function listArgs(limit) {
 }
 
 /**
- * `gh pr list` → queue-modell tömb.
+ * `gh pr list` → queue-model array.
  *
- * A `limit` MAGAS alapértéke szándékos: a `gh` alapértelmezett 30-a egy aktív
- * repóban CSENDBEN vágná el a listát, és a hiányzó PR-ek hiánya nem tűnik fel
- * — pontosan az a hibaosztály, amit a néma üres listánál is kerülünk.
+ * The HIGH default for `limit` is deliberate: `gh`'s default of 30 would
+ * SILENTLY cut off the list in an active repo, and the missing PRs' absence
+ * wouldn't be noticed — exactly the error class we're also avoiding with the
+ * silently-empty-list case.
  */
 export function fetchQueue({ limit = 200 } = {}) {
   const viewer = viewerLogin()
@@ -168,8 +173,8 @@ export function fetchQueue({ limit = 200 } = {}) {
 }
 
 /**
- * A fetchQueue ASZINKRON párja — BÁJTRA ugyanaz a szerződés (alak, hibaszöveg),
- * csak az event loop marad szabad.
+ * The ASYNC counterpart of fetchQueue — BYTE-FOR-BYTE the same contract
+ * (shape, error text), only the event loop stays free.
  */
 export async function fetchQueueAsync({ limit = 200 } = {}) {
   const viewer = viewerLogin()
