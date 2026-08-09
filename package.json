@@ -39,6 +39,10 @@
   "optionalDependencies": {
     "node-pty": "^1.1.0"
   },
+  "scripts": {
+    "test": "node --test test/",
+    "check": "node --check bin/tuipr.mjs && node --test test/"
+  },
   "engines": {
     "node": ">=20"
   }

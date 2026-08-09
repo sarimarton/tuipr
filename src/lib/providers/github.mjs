@@ -47,7 +47,7 @@ const PR_FIELDS = [
  * kettőt EGYÜTT kell nézni, különben egy épp frissülő PR-t hamisan
  * konfliktusosnak jelentenénk.
  */
-function classify(pr) {
+export function classifyPr(pr) {
   if (pr.isDraft) return 'draft'
   if (pr.mergeable === 'CONFLICTING' || pr.mergeStateStatus === 'DIRTY') return 'conflict'
   // A `BLOCKED` ÖNMAGÁBAN NEM jelent blokkolt PR-t — MÉRT lelet a cli/cli
@@ -70,7 +70,7 @@ function classify(pr) {
  * Approve-olható-e ÁLTALUNK. A saját PR-t a GitHub sem engedi jóváhagyni,
  * tehát ezt nem is ajánljuk fel — a fail-closed irány itt a `false`.
  */
-function canApprove(pr, viewer) {
+export function canApprovePr(pr, viewer) {
   if (pr.isDraft) return false
   if (viewer && pr.author?.login === viewer) return false
   if (pr.reviewDecision === 'APPROVED') return false
@@ -134,14 +134,14 @@ function parsePrList(res) {
 }
 
 /** Nyers `gh`-PR → queue-modell sor. */
-function toRow(pr, { viewer, mergeMethod }) {
+export function toQueueRow(pr, { viewer, mergeMethod }) {
   return {
     number: pr.number,
     title: pr.title,
-    state: classify(pr),
+    state: classifyPr(pr),
     isDraft: Boolean(pr.isDraft),
     reviewDecision: pr.reviewDecision || null,
-    canApprove: canApprove(pr, viewer),
+    canApprove: canApprovePr(pr, viewer),
     headRefName: pr.headRefName,
     baseRefName: pr.baseRefName,
     mergeMethod,
@@ -164,7 +164,7 @@ export function fetchQueue({ limit = 200 } = {}) {
   const viewer = viewerLogin()
   const mergeMethod = repoMergeMethod()
   const prs = parsePrList(spawnSync('gh', listArgs(limit), { encoding: 'utf8' }))
-  return prs.map((pr) => toRow(pr, { viewer, mergeMethod }))
+  return prs.map((pr) => toQueueRow(pr, { viewer, mergeMethod }))
 }
 
 /**
@@ -175,5 +175,5 @@ export async function fetchQueueAsync({ limit = 200 } = {}) {
   const viewer = viewerLogin()
   const mergeMethod = repoMergeMethod()
   const prs = parsePrList(await spawnCollect('gh', listArgs(limit)))
-  return prs.map((pr) => toRow(pr, { viewer, mergeMethod }))
+  return prs.map((pr) => toQueueRow(pr, { viewer, mergeMethod }))
 }

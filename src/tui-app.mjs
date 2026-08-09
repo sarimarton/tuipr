@@ -240,130 +240,141 @@ export function activeTickers() {
   return tickerCount
 }
 
-// A KÖLTÉS-PLAFON nem itt, konstansként él: DEFAULTBAN KI VAN KAPCSOLVA, és a
-// megerősítő overlayen ad hoc kapcsolható ('b'), hangsúlytalanul (lásd a core
-// budget-fejezetét: a `--max-budget-usd` API-költésre való, a user viszont
-// subscription-limitet fogyaszt, tehát a hatása bizonytalan). Az env
-// (TUIPR_AI_REVIEW_BUDGET_USD) csak KEZDŐÉRTÉKET ad — nem kényszerít plafont.
+// The SPEND CAP doesn't live here as a constant: it's OFF BY DEFAULT, and can
+// be toggled ad hoc on the confirmation overlay ('b'), unemphasized (see the
+// core's budget chapter: `--max-budget-usd` is meant for API spend, while the
+// user actually consumes a subscription limit, so its effect is uncertain).
+// The env (TUIPR_AI_REVIEW_BUDGET_USD) only gives a STARTING VALUE — it does
+// not enforce a cap.
 
-// A LEGENDA egyetlen kulcsot hirdet a PR-panelre: az ENTERT. A korábbi 'c'
-// (conflict-diagnózis) és 'i' (miért dep?) EGY panelbe olvadt, majd a user
-// kérésére a nyitó-kulcs az `i`-ről az Enterre került ("a lenyíló »i« helyett
-// lehetne Enterre") — a listában a sor KINYITÁSA univerzálisan az Enter.
+// The LEGEND advertises a single key for the PR panel: ENTER. The earlier 'c'
+// (conflict diagnosis) and 'i' (why a dep?) merged into ONE panel, and then at
+// the user's request the opening key moved from `i` to Enter ("instead of the
+// dropdown »i« it could be Enter") — in the list, OPENING a row is
+// universally Enter.
 //
-// AZ 'i' TOVÁBBRA IS MŰKÖDIK (csendes alias, lásd a keybind-ágat), de NEM
-// hirdetjük: két hirdetett kulcs ugyanarra a funkcióra csak zajt ad ebben a
-// szűk, degradálódó láblécben.
-// (wf31/11) A `R_KEY_IDLE_LABEL` KIVEZETVE. A globális legenda többé NEM hordoz
-// r-szegmenst (lásd a `KEYS`-t alább), tehát nincs mit CSERÉLNI benne — a
-// konstans egyetlen célja a csere-minta volt. Az `r` ÁLLAPOTFÜGGŐ címkéje
-// VÁLTOZATLANUL él ott, ahol a kulcsot hirdetjük is: a panel láblécében
-// (`panelFooter({ rLabel })`), és azt a render a `rKeyLabel`-ből számolja
-// közvetlenül.
+// 'i' STILL WORKS (a silent alias, see the keybind branch), but we do NOT
+// advertise it: two advertised keys for the same function is just noise in
+// this narrow, shrinking footer.
+// (wf31/11) `R_KEY_IDLE_LABEL` RETIRED. The global legend no longer carries an
+// r-segment (see `KEYS` below), so there's nothing to SWAP in it — the
+// constant's only purpose was the swap pattern. The `r`'s STATE-DEPENDENT
+// label still lives UNCHANGED where the key is actually advertised: in the
+// panel footer (`panelFooter({ rLabel })`), and the render computes it
+// directly from `rKeyLabel`.
 //
-// EXPORTÁLT: a lábléc-tesztek eddig a FÁJL SZÖVEGÉBŐL kaparták ki egy
-// `const KEYS = '…'` regexszel. Az a csatolás kétszeresen törékeny: (a) a
-// literál-alak megváltoztatása (idézőjel → template literal) NÉMÁN üres
-// match-et ad, és a teszt a saját regexén bukik, nem a kódon; (b) egy
-// interpolált szegmens értékét a forrás-szöveg meg sem mutatja. A tesztek
-// mostantól az ÉRTÉKET olvassák, nem a forráskód-ábrázolást.
+// EXPORTED: the footer tests used to scrape a `const KEYS = '…'` out of the
+// FILE TEXT with a regex. That coupling is doubly fragile: (a) changing the
+// literal's form (quotes → template literal) SILENTLY gives an empty match,
+// and the test fails on its own regex, not on the code; (b) the source text
+// doesn't even show the value of an interpolated segment. The tests now read
+// the VALUE, not the source-code representation.
 export { KEYS }
-// (wf31/6) `f: review feltöltése` — a user: "»feltöltés« nem elég informatív.
-// Legyen »review feltöltése«." A régi `findings feltöltése` a MECHANIZMUST
-// nevezte meg (mit szedünk össze), nem az EREDMÉNYT (mi jelenik meg a PR-on): a
-// user nézőpontjából egy REVIEW kerül fel a nevében. A `panelFooter` ugyanezt a
-// szöveget hordozza — a kettőnek egyet kell mondania.
-// (wf31/11) A GLOBÁLIS LEGENDA A LISTA SZINTJÉRE SZŰKÜLT — a user kérése: "Ebből
-// vedd ki a conflict mérést, a d-t, az r-t és az f-et. Az a és m maradhat."
+// (wf31/6) `f: review feltöltése` (upload review) — the user: "»upload« isn't
+// informative enough. Make it »upload review«." The old "upload findings"
+// named the MECHANISM (what we collect), not the RESULT (what appears on the
+// PR): from the user's point of view, a REVIEW is what goes up under that
+// name. `panelFooter` carries the same text — the two must say the same thing.
+// (wf31/11) THE GLOBAL LEGEND NARROWED TO THE LIST LEVEL — the user's request:
+// "Take the conflict measurement, d, r and f out of this. a and m can stay."
 //
-// MI AZ ELV, AMI EZT HELYESSÉ TESZI (és nem csak rövidítés): a KIVETT NÉGY kulcs
-// EGY PR-RA vonatkozó, RÉSZLETES művelet — a conflict-mérés, a diff-review, az
-// AI-review és a review-feltöltés mind azt kívánja, hogy a user MÁR eldöntötte,
-// MELYIK PR-ral foglalkozik. Az a döntés a PANELBEN születik, és a panel lábléce
-// (`panelFooter`) mind a négyet hirdeti is. A LISTA szintjén tehát a navigáció, a
-// belépés (`Enter`), a két LANDOLÁSI akció (`a`/`m` — ezek a queue-nézet saját
-// műveletei, sorról sorra értelmesek) és a globális kulcsok (`R`/`q`) maradnak.
+// THE PRINCIPLE THAT MAKES THIS RIGHT (not just a shortening): the FOUR
+// REMOVED keys are DETAILED operations on ONE PR — the conflict measurement,
+// the diff review, the AI review and the review upload all presuppose that
+// the user has ALREADY decided WHICH PR they're dealing with. That decision
+// is made IN THE PANEL, and the panel's footer (`panelFooter`) advertises all
+// four anyway. At the LIST level, then, navigation, entering (`Enter`), the
+// two LANDING actions (`a`/`m` — these are the queue view's own operations,
+// meaningful row by row) and the global keys (`R`/`q`) remain.
 //
-// AZ `r` KIESÉSÉVEL A `legendWithRLabel` HELPER IS MEGSZŰNT (wf31/5-ben született,
-// az üres r-címke lógó szeparátorát zárta ki). Nem "árván maradt", hanem
-// TÁRGYTALAN: a legenda már nem hordoz r-szegmenst, tehát nincs mit cserélni. Egy
-// megtartott, örökre no-op helper rosszabb, mint a törlés — a következő olvasónak
-// azt sugallná, hogy a legenda állapotfüggő, holott statikus. A `panelFooter`
-// SAJÁT szűrése (`filter` az üres szegmensekre) VÁLTOZATLAN: ott az `r` továbbra
-// is állapotfüggő, és ott a védelem is a helyén marad.
+// WITH `r` GONE, THE `legendWithRLabel` HELPER ALSO WENT AWAY (born in
+// wf31/5, it closed off the empty r-label's dangling separator). Not
+// "orphaned" but MOOT: the legend no longer carries an r-segment, so there's
+// nothing to swap. A kept, forever-no-op helper is worse than deletion — it
+// would suggest to the next reader that the legend is state-dependent, when
+// it's actually static. `panelFooter`'s OWN filtering (`filter` for empty
+// segments) is UNCHANGED: there `r` is still state-dependent, and the
+// guard stays in place there too.
 //
-// Az `Enter` LEÍRÁSA "részletek" (a user kérése). A régi "PR-panel (info +
-// lépések)" a panel BELSŐ SZERKEZETÉT írta le, ami a lista szintjén érdektelen —
-// a user azt akarja tudni, hogy MI TÖRTÉNIK a leütésre: kinyílnak a részletek.
-// (wf31/28) A `d`/`r` VISSZAKERÜLT, A NAVIGÁCIÓ-SZEGMENS RÖVIDÜLT.
+// `Enter`'s DESCRIPTION IS "details" (the user's request). The old "PR panel
+// (info + steps)" described the panel's INTERNAL STRUCTURE, which is
+// irrelevant at the list level — the user wants to know WHAT HAPPENS on
+// keypress: the details open up.
+// (wf31/28) `d`/`r` CAME BACK, THE NAVIGATION SEGMENT SHORTENED.
 //
-// A user leletéből: "lista legendjeiből a d és r hiányzik, mert én kivetettem, de
-// a parancsok működnek." A döntés a visszatétel, rövidített legenddel.
+// From the user's finding: "d and r are missing from the list legends because
+// I took them out, but the commands still work." The decision was to bring
+// them back, with a shortened legend.
 //
-// MIÉRT INDOKOLT VISSZATENNI (a wf31/11-es kivezetés részben téves volt): a `d`
-// (diff) és az `r` (review) SOR-SZINTŰ gesztus — nem kell panelt nyitni ahhoz,
-// hogy tudjuk, melyik PR-ról van szó: a KURZOR megmondja. Ez UGYANAZ a szint, mint
-// az `a`/`m`, amiket a user meg is hagyott. A `c` (conflict-mérés) és az `f`
-// (feltöltés) viszont MARAD kivezetve: az elsőt a mért sáv hirdeti a saját
-// kontextusában, a másodikat a panel lábléce (és csak akkor, ha van mit feltölteni).
+// WHY BRINGING THEM BACK IS JUSTIFIED (the wf31/11 removal was partly wrong):
+// `d` (diff) and `r` (review) are ROW-LEVEL gestures — you don't need to open
+// a panel to know which PR is meant: the CURSOR tells you. This is the SAME
+// level as `a`/`m`, which the user kept anyway. `c` (conflict measurement) and
+// `f` (upload), however, STAY removed: the former is advertised by the
+// measured strip in its own context, the latter by the panel footer (and only
+// when there's something to upload).
 //
-// A „CRAMMED UI" ELLENÉRV MÁR NEM ÁLL: a wf31/27 óta a legend a TÁBLA szélességén
-// él (nem a monitorén), és a `j/k vagy ↑/↓: navigáció` → `j/k: sor` rövidítés
-// felszabadítja a helyet. A nyilak TOVÁBBRA IS működnek, csak nem hirdetjük —
-// ugyanaz az elv, ami az `i` aliasnál (két hirdetett kulcs egy funkcióra zaj).
-// (wf31/30) AZ `⏎` UNICODE JEL a `Enter` szó helyett — a user kérése: "Legendben
-// »Enter« helyett Enter karakter legyen, van neki egy unicode jele". A `⏎`
-// (U+23CE RETURN SYMBOL) CELLÁBAN 1 (mérve: nincs a WIDE_RANGES-ben, nem
-// emoji-alak), tehát 5 cellát szabadít fel a szöveges alakhoz képest.
-const KEYS = 'j/k: sor · ⏎: részletek · d: diff · r: review · a: approve · m: merge · R: refresh · q: kilépés'
+// THE "CRAMMED UI" COUNTERARGUMENT NO LONGER HOLDS: since wf31/27 the legend
+// lives at the TABLE's width (not the monitor's), and the
+// `j/k vagy ↑/↓: navigáció` → `j/k: sor` shortening frees up the space. The
+// arrows STILL work, we just don't advertise them — same principle as the `i`
+// alias (two advertised keys for one function is noise).
+// (wf31/30) THE `⏎` UNICODE GLYPH instead of the word `Enter` — the user's
+// request: "In the legend, instead of »Enter« there should be the Enter
+// character, it has a unicode glyph". `⏎` (U+23CE RETURN SYMBOL) is 1 cell
+// wide (measured: not in WIDE_RANGES, not an emoji form), so it frees up 5
+// cells compared to the text form.
+const KEYS = 'j/k: row · ⏎: details · d: diff · r: review · a: approve · m: merge · R: refresh · q: quit'
 
 /**
- * (wf31/45) A PENDING-CÍMKE — A LEGEND JOBB SZÉLÉRE, INVERZ KIEMELÉSSEL.
+ * (wf31/45) THE PENDING LABEL — ON THE RIGHT EDGE OF THE LEGEND, WITH INVERSE HIGHLIGHT.
  *
- * A user útja idáig, mert a döntések egymásra épülnek:
- *   1. wf31/23 — a globális status-sor kivezetve, a pending a legend SZEGMENSÉBE
- *      került (`d: diff (fut…)`);
- *   2. a user lelete: "nem követhető a szemnek, layout jump van a status soron" —
- *      a szegmens-hosszabbodás 7 cellával eltolta az utána következő négy
- *      szegmenst, épp azokat, amiket a szem horgonyként használt;
- *   3. a user javaslata: "jobb alsó sarok üres, így nem kellene saját sor" — a
- *      legend ~93 cella, a jobb oldal végig szabad;
- *   4. a user pontosítása: "inverz bg-color színnel jeleníteném meg, tehát világos
- *      háttér, sötét char".
+ * The user's path to here, because the decisions build on each other:
+ *   1. wf31/23 — the global status line retired, the pending moved into a
+ *      legend SEGMENT (`d: diff (running…)`);
+ *   2. the user's finding: "hard to track visually, there's a layout jump on
+ *      the status line" — the segment lengthening shifted the following four
+ *      segments by 7 cells, exactly the ones the eye used as an anchor;
+ *   3. the user's suggestion: "the bottom-right corner is empty, so it
+ *      shouldn't need its own row" — the legend is ~93 cells, the right side
+ *      is free the whole way;
+ *   4. the user's refinement: "I'd show it with an inverse bg-color, so light
+ *      background, dark char".
  *
- * MIÉRT JUMP-MENTES: a legend BAL oldala bájtra változatlan, a pending a sor JOBB
- * végén jelenik meg és tűnik el. A szem semmit nem lát elmozdulni.
+ * WHY IT'S JUMP-FREE: the legend's LEFT side is byte-for-byte unchanged, the
+ * pending appears and disappears at the RIGHT end of the line. The eye sees
+ * nothing else move.
  *
- * MIÉRT ITT A HELYE (és nem saját sorban): a UI-ban MÁR LÉTEZIK a „bal = állandó,
- * jobb = efemer" tengely — a fejléc `notice`-a ugyanígy jobbra igazítva ül. A
- * legend egy sorral lejjebb ugyanezt a szabályt követi, tehát EGY olvasási szokás
- * szolgál két helyet.
+ * WHY IT LIVES HERE (and not on its own line): the UI ALREADY HAS the "left =
+ * constant, right = ephemeral" axis — the header's `notice` sits right-aligned
+ * the same way. The legend, one line down, follows the same rule, so ONE
+ * reading habit serves two places.
  *
- * MIÉRT A GESZTUS, NEM A KULCS (`⏳ hunk megnyitása…`, nem `⏳ d…`): a kulcsot a
- * user a bal oldalon LÁTJA — a jobb oldal azt mondja meg, MI TÖRTÉNIK. Ez a
- * kivezetett status-sor egyetlen megtartott tanulsága.
+ * WHY THE GESTURE, NOT THE KEY (`⏳ opening hunk…`, not `⏳ d…`): the user
+ * SEES the key on the left — the right side says WHAT'S HAPPENING. This is
+ * the one lesson kept from the retired status line.
  */
-// A HÁROM PONT ASCII, NEM `…` (U+2026) — MÉRT OK, a user leletéből: "a pending
-// legendben csak KETTŐ db pont látszik a három helyett".
+// THE THREE DOTS ARE ASCII, NOT `…` (U+2026) — MEASURED REASON, from the
+// user's finding: "in the pending legend only TWO dots are visible instead of three".
 //
-// A `…` East Asian Width szerint **Ambiguous**: a `displayWidth` 1 cellának
-// veszi (helyesen, mert a legtöbb terminálban az), a Ghostty/font viszont
-// szélesebbre rajzolja — egyetlen glif három ponttal, ami 1 cellába szorítva a
-// harmadik pontját elveszti. A jobbra igazítás miatt ez épp a sor VÉGÉN ül,
-// ahol nincs hova kilógnia.
+// `…` is **Ambiguous** per East Asian Width: `displayWidth` treats it as 1
+// cell (correctly, since that's true in most terminals), but Ghostty/the font
+// renders it wider — a single glyph with three dots, which loses its third
+// dot when squeezed into 1 cell. Because of the right-alignment this sits
+// right at the END of the line, where there's nowhere for it to overflow into.
 //
-// MIÉRT NEM A `WIDE_RANGES`-T BŐVÍTJÜK: az `U+2026` NEM Wide, hanem Ambiguous —
-// 2 cellásra véve MINDEN más helyen (panel-szövegek, status-sorok) egy cellányi
-// hamis szélességet vinnénk be. A kétértelmű glifet magát cseréljük ki: a `...`
-// három ASCII karakter, tehát BÁRMELY terminálban pontosan 3 cella, mérés és
-// találgatás nélkül. A homokóra (`U+23F3`) marad — az EAW=Wide, a táblázatban
-// benne van, és MÉRVE helyesen 2 cellát kap.
+// WHY WE DON'T EXTEND `WIDE_RANGES`: `U+2026` is NOT Wide, it's Ambiguous —
+// treating it as 2 cells would introduce a false cell of width EVERYWHERE
+// else it's used (panel texts, status lines). We replace the ambiguous glyph
+// itself instead: `...` is three ASCII characters, so it's EXACTLY 3 cells in
+// ANY terminal, no measuring or guessing needed. The hourglass (`U+23F3`)
+// stays — its EAW is Wide, it's in the table, and MEASURED it correctly gets 2 cells.
 const PENDING_LABELS = {
-  d: '⏳ hunk megnyitása...',
-  f: '⏳ review feltöltése...',
+  d: '⏳ opening hunk...',
+  f: '⏳ uploading review...',
   a: '⏳ approve...',
   m: '⏳ merge...',
-  R: '⏳ frissítés...',
+  R: '⏳ refreshing...',
 }
 
 /**
@@ -864,185 +875,197 @@ export function App({
     })
   }, [])
 
-  // --- A HÁTTÉR-POLL (elavultság-ellenőrzés) --------------------------------
+  // --- THE BACKGROUND POLL (staleness check) --------------------------------
   //
-  // AZ ÓRA egy `useCallback`-be zárt hivatkozás: élesben `Date.now()`, tesztben
-  // az injektált (skálázott) óra. MIÉRT NEM olvassuk közvetlenül a propot a
-  // használati helyeken: a `now()` a tick-callbackben ÉS a `useInput`-ban is
-  // kell, és egy elszórt `pollNow ? pollNow() : Date.now()` háromszor
-  // ismételve pontosan az a fajta duplikáció, amiből az egyik ág lemarad.
+  // THE CLOCK is a reference closed over in a `useCallback`: `Date.now()` in
+  // production, the injected (scaled) clock in tests. WHY WE DON'T read the
+  // prop directly at the call sites: `now()` is needed both in the tick
+  // callback AND in `useInput`, and a scattered `pollNow ? pollNow() : Date.now()`
+  // repeated three times is exactly the kind of duplication where one branch
+  // falls behind.
   const now = useCallback(() => (pollNow ? pollNow() : Date.now()), [pollNow])
-  // A POLL ÁLLAPOTA `useRef`-ben, NEM state-ben.
+  // THE POLL STATE lives in a `useRef`, NOT in state.
   //
-  // MIÉRT: a poll a háttérben LÉPTETI magát (esedékesség-számítás, backoff),
-  // és ezek a léptetések a UI-t NEM változtatják meg. Ha state lenne, minden
-  // tick újrarenderelné a teljes listát — egy 100 soros queue-nál ez a poll
-  // költségét a UI-ra terhelné, méghozzá 100 s-onként ok nélkül. A RENDERT
-  // KIZÁRÓLAG a LÁTHATÓ jelzés váltja ki (`pollLabel` state), amit a
-  // tick-callback csak akkor ír, ha TÉNYLEGESEN megváltozott.
+  // WHY: the poll steps itself forward in the background (due-time
+  // calculation, backoff), and these steps do NOT change the UI. If it were
+  // state, every tick would re-render the whole list — for a 100-row queue
+  // this would load the poll's cost onto the UI, every 100 s, for no reason.
+  // RENDERING is triggered EXCLUSIVELY by the VISIBLE indicator (`pollLabel`
+  // state), which the tick callback only writes when it has ACTUALLY changed.
   const poll = React.useRef(pollInit({ now: 0 }))
-  // A LÁTHATÓ poll-jelzés (a fejléc szövege). Külön state a poll-állapottól:
-  // ez az EGYETLEN dolog, amiért a poll rendert okozhat.
+  // THE VISIBLE poll indicator (the header text). Separate state from the poll
+  // state: this is the ONE thing the poll is allowed to cause a render for.
   const [pollLabel, setPollLabel] = useState('')
-  // A FUTÓ PRÓBA őrszeme: két próba SOSEM futhat egyszerre. A `fetchStalenessProbe`
-  // spawnSync-es (blokkoló), tehát ha egy tick a előző próba alatt indulna, a
-  // két blokkoló hívás sorba állna, és a UI kétszer annyit fagyna.
+  // SENTINEL FOR THE RUNNING PROBE: two probes can NEVER run at once.
+  // `fetchStalenessProbe` is spawnSync-based (blocking), so if a tick were to
+  // start while the previous probe is running, the two blocking calls would
+  // queue up, and the UI would freeze for twice as long.
   const probing = React.useRef(false)
   const [busy, setBusy] = useState(false)
-  // (wf31/23) A FUTÓ AKCIÓ KULCSA — a LEGENDBEN jelöljük meg, nem egy globális
-  // status-sorban (az kivezetve). A user kérése: "Amikor pending állapotra van
-  // szükség, azt mindig a triggerelő legendnél tedd be, akár valami »(betöltés)«
-  // felirattal, tehát kontextuális legyen."
+  // (wf31/23) THE RUNNING ACTION'S KEY — marked in the LEGEND, not in a global
+  // status line (that's been retired). The user's request: "Whenever a pending
+  // state is needed, always put it at the triggering legend entry, maybe with
+  // a '(loading)' label, so it's contextual."
   //
-  // A KULCS (nem a teljes címke) azért, mert a legenda a kulcsról ismeri fel a
-  // szegmenst (`a: approve` → `a: approve (fut…)`). Egy teljes szöveg itt nem
-  // lenne illeszthető a legendához.
+  // The KEY (not the full label) is used because the legend recognizes the
+  // segment from the key (`a: approve` → `a: approve (running…)`). A full
+  // string here wouldn't fit into the legend.
   //
-  // A `busy`-val EGYÜTT él: a `runExclusive` állítja be és törli, ugyanabban a
-  // try/finally-ban — így a hiba-utakon sem tud beragadni.
+  // Lives TOGETHER with `busy`: `runExclusive` sets and clears both in the
+  // same try/finally — so it can't get stuck on error paths either.
   const [pendingKey, setPendingKey] = useState(null)
-  // (wf31/72) MELYIK PR-ON FUT AZ AKCIÓ — a pending a SORHOZ kötve.
+  // (wf31/72) WHICH PR THE ACTION IS RUNNING ON — pending is tied to the ROW.
   //
-  // A user kérése: "approve esetén pending UI közben tudjak elnavigálni másik
-  // PR-ra […] és a táblázatban is jelenjen meg a pending approve, hogy amikor
-  // elnavigálok, lássam, hogy a régi sor pending."
+  // The user's request: "during approve, while the pending UI is up, I want to
+  // be able to navigate to another PR […] and have the pending approve show
+  // up in the table too, so when I navigate away I can see the old row is
+  // pending."
   //
-  // EDDIG A PENDING GLOBÁLIS VOLT (`busy` + `pendingKey`), és a legendben élt — az
-  // elég volt, amíg a navigáció TILTVA volt a futó akció alatt (a user ott állt,
-  // ahol az akció futott). Navigálható pending mellett viszont a jelzésnek tudnia
-  // kell, MELYIK sorhoz tapadjon.
+  // UNTIL NOW PENDING WAS GLOBAL (`busy` + `pendingKey`), and lived in the
+  // legend — that was enough as long as navigation was DISABLED while an
+  // action was running (the user stayed put where the action ran). With
+  // navigable pending, though, the indicator needs to know WHICH row to stick to.
   //
-  // EGY SZÁM, NEM TÉRKÉP: az `actionLock` egyszerre EGY akciót enged, tehát több
-  // párhuzamos pending nem létezhet — egy térkép hazug affordance lenne.
+  // A SINGLE NUMBER, NOT A MAP: `actionLock` allows only ONE action at a time,
+  // so multiple concurrent pendings can't exist — a map here would be a
+  // dishonest affordance.
   const [pendingPr, setPendingPr] = useState(null)
-  // AZ AI-REVIEW LÁTHATÓ ÁLLAPOTA — A PR-PANELBEN ÉL (a user 3. pontja: "a
-  // statusüzenet a képernyő lenti részén nem jó hely, mutálja a layoutot").
-  // Egy objektum:
+  // THE VISIBLE STATE OF THE AI REVIEW — LIVES IN THE PR PANEL (the user's
+  // point 3: "the status message at the bottom of the screen isn't a good
+  // spot, it mutates the layout"). An object:
   //   { pr, status: 'starting'|'running'|'done'|'done-answer'|'no-findings'|
   //     'aborted'|'timeout'|'killed-by-exit'|'failed', startedAt?, added?,
   //     findings?, offer?, message? }
-  // A panel AKKOR mutatja, ha a sora egyezik (aiReview.pr === panel.row.number).
-  // Az alsó globális status-sor AI-review vonatkozású (progressz/végállapot)
-  // használata MEGSZŰNT — a status-sor legfeljebb input-visszajelzést ad
-  // ("nincs futó AI-review…").
+  // The panel shows it WHEN its row matches (aiReview.pr === panel.row.number).
+  // Use of the bottom global status line for AI-review matters (progress/final
+  // state) has been RETIRED — the status line at most gives input feedback
+  // ("no AI review running…").
   const [aiReview, setAiReview] = useState(null)
-  // (2) A REVIEW-CASCADE-MENÜ ÁLLAPOTA — a MEGSZŰNT megerősítő modál helyén.
+  // (2) THE REVIEW-CASCADE-MENU STATE — replacing the RETIRED confirmation modal.
   //
-  // Alak: a core `reviewMenuOpen`-jének state-je (`{ stage, armedAt, pathIndex,
-  // model, budget, warning? }`), vagy `null` (zárt menü).
+  // Shape: the core's `reviewMenuOpen` state (`{ stage, armedAt, pathIndex,
+  // model, budget, warning? }`), or `null` (closed menu).
   //
-  // MIÉRT KÜLÖN STATE, ÉS MIÉRT NEM A `panel.modal`-BAN: a menü NEM modál. A
-  // `panelToModal` a MÓDOT is átállítja (`mode: 'modal'`), amiből a `panelKeys`
-  // kizárja a lista-navigációt és a `d`/`a`/`m`-et — a menü viszont a panel
-  // INLINE módjában él, a lábléc helyén. Ha a modál-state-be tettem volna, a
-  // menü megnyitása némán elvette volna a panel összes többi kulcsát, és a
-  // `modalHasChoices`-alapú nyilas ágak is ráfutottak volna (a fel/le a
-  // választást léptetné a lista helyett). A KÜLÖN state tehát nem kényelem: a
-  // két dialógus-tipológia (inline vs. modál) szétválasztása.
+  // WHY A SEPARATE STATE, AND WHY NOT IN `panel.modal`: the menu is NOT a
+  // modal. `panelToModal` also switches the MODE (`mode: 'modal'`), from which
+  // `panelKeys` excludes list navigation and `d`/`a`/`m` — but the menu lives
+  // in the panel's INLINE mode, in the footer's place. Had it gone into the
+  // modal state, opening the menu would have silently taken away all of the
+  // panel's other keys, and the `modalHasChoices`-based arrow branches would
+  // have kicked in too (up/down would step the choice instead of the list).
+  // The SEPARATE state is thus not a convenience: it's the separation of the
+  // two dialog typologies (inline vs. modal).
   //
-  // A ROW-HOZ KÖTÉS: a menü a `pr` mezőben hordozza, MELYIK PR-ra nyílt. A
-  // `j/k` a menü alatt nem él (lásd a useInput menü-ágát), de a poll/reload
-  // átírhatja a modellt — egy sor-számhoz nem kötött menü akkor egy MÁS PR-ra
-  // indítana review-t (ugyanaz a stale-osztály, amit a mérés-callbackek
-  // `row.number !== pr` guardja zár ki).
+  // BINDING TO THE ROW: the menu carries WHICH PR it was opened for in the
+  // `pr` field. `j/k` don't live under the menu (see the useInput menu
+  // branch), but poll/reload can rewrite the model — a menu not bound to a
+  // row number would then start a review on a DIFFERENT PR (the same stale
+  // class that the measurement callbacks' `row.number !== pr` guard excludes).
   const [reviewMenu, setReviewMenu] = useState(null)
-  // A TICK-SZÁMLÁLÓ: a futó review alatt másodpercenként lép, és EGYSZERRE
-  // hajtja a panel eltelt-idő-sorát ÉS a lista-sor Braille-spinnerét (a 4. pont
-  // kikötése: a meglévő tickerrel, NEM külön timerrel). Review nélkül nem lép,
-  // tehát nem is renderel.
+  // THE TICK COUNTER: steps once a second while a review is running, and
+  // drives BOTH the panel's elapsed-time row AND the list row's Braille
+  // spinner AT THE SAME TIME (point 4's requirement: with the existing
+  // ticker, NOT a separate timer). Doesn't step without a review, so it
+  // doesn't render either.
   const [aiTick, setAiTick] = useState(0)
-  // A DUPLA-`x` ÉLESÍTÉSE (a user kérése, szó szerint: "a megszakitas/elvetes
-  // 'x'-et 2x kelljen megnyomni"). Alak: { pr, kind: 'abort' | 'discard' } vagy
-  // null. Az első `x` élesít (a címke "megszakítás/elvetés megerősítése"-re
-  // vált), a MÁSODIK hajt végre. BÁRMELY MÁS gomb visszavonja (a useInput
-  // legelején nullázódik), tehát az élesített állapot nem ragadhat be; a
-  // review közbeni befejeződés a KIND-egyezésen bukik el (abort-arm nem hajt
-  // végre elvetést — újraélesít). A dwell-kaput (armedAt) NEM érinti.
+  // ARMING THE DOUBLE-`x` (the user's request, literally: "abort/discard
+  // should need pressing 'x' twice"). Shape: { pr, kind: 'abort' | 'discard' }
+  // or null. The first `x` arms it (the label switches to "confirm
+  // abort/discard"), the SECOND executes. ANY OTHER key cancels it (reset at
+  // the very top of useInput), so the armed state can't get stuck; completion
+  // during a review fails on the KIND match (an abort-arm doesn't execute a
+  // discard — it re-arms instead). Does NOT affect the dwell gate (armedAt).
   const [xArm, setXArm] = useState(null)
-  // AZ EGYESÍTETT PR-PANEL — EGY állapot a korábbi NÉGY dialógus helyén.
+  // THE UNIFIED PR PANEL — ONE state in place of the previous FOUR dialogs.
   //
-  // A KORÁBBI ÁLLAPOT: `info` ÉS `confirm` KÜLÖN state volt, és a NÉGY dialógus
-  // (info / approve / merge / ai-review) egymástól függetlenül nyílt-zárult. Két
-  // mért következménye volt:
+  // THE PREVIOUS STATE: `info` AND `confirm` were SEPARATE state, and the FOUR
+  // dialogs (info / approve / merge / ai-review) opened and closed
+  // independently of each other. It had two measured consequences:
   //
-  //   1) A HUROK: az info-panelen az `a`/`m`/`r` a "bármely más gomb" ágra futott
-  //      — NÉMÁN bezárta a panelt, és semmit nem indított. A usernek ki kellett
-  //      lépnie, hogy cselekedhessen ("megnézem → visszalépek → cselekszem").
-  //   2) AZ ORPHAN CONFIRM: a zárási utak szétcsúsztak (volt ág, ami az egyiket
-  //      zárta, a másikat nem). Egy nyitva maradt confirm a lista fölött azt
-  //      jelentette, hogy a következő `y` egy MÁR ELFELEJTETT PR-t erősít meg.
+  //   1) THE LOOP: in the info panel, `a`/`m`/`r` fell into the "any other
+  //      key" branch — it SILENTLY closed the panel and started nothing. The
+  //      user had to exit in order to act ("look → step back → act").
+  //   2) THE ORPHAN CONFIRM: the closing paths drifted apart (one branch
+  //      closed one, but not the other). A confirm left open above the list
+  //      meant the next `y` would confirm a PR that was ALREADY FORGOTTEN.
   //
-  // AZ ÚJ MODELL: EGY state, két MÓDDAL (a mód a dialógus-tipológiából
-  // következik, nem konfigurációból — lásd a core PANEL-fejezetét):
-  //   mode 'inline' — INFO: a kiválasztott sor ALATT, a lista végig látszik, és
-  //     a panel alatt navigálni is lehet (a mérés közben is).
-  //   mode 'modal'  — MEGERŐSÍTÉS: a RENDER ugyanaz az inline panel (5a: a
-  //     lista látható marad), de a fel/le a VÁLASZTÁST lépteti, nem a listát,
-  //     és a d/r/a/m nem él.
+  // THE NEW MODEL: ONE state, with two MODES (the mode follows from the
+  // dialog typology, not from configuration — see the core's PANEL section):
+  //   mode 'inline' — INFO: BELOW the selected row, the list stays visible the
+  //     whole time, and you can also navigate below the panel (even during a
+  //     measurement).
+  //   mode 'modal'  — CONFIRMATION: the RENDER is the same inline panel (5a:
+  //     the list stays visible), but up/down steps the CHOICE, not the list,
+  //     and d/r/a/m are inactive.
   //
-  // A `progress` (mérés-állapotgép) a PANEL állapotában él, nem külön state-ben:
-  // a mérés a panel egyik sávja, és a szétválasztás pont azt a négy-dialógusos
-  // szétesést hozná vissza. NEM ugyanaz, mint a `busy`: a busy BLOKKOLNA (a
-  // spawnSync-es akciók alatt van értelme), itt viszont épp az a lényeg, hogy a
-  // UI használható marad.
+  // `progress` (the measurement state machine) lives in the PANEL's state, not
+  // in a separate state: the measurement is one of the panel's bars, and
+  // splitting it out would bring back exactly that four-dialog fragmentation.
+  // NOT the same as `busy`: busy would BLOCK (it makes sense for spawnSync-based
+  // actions), whereas here the whole point is that the UI stays usable.
   const [panel, setPanel] = useState(null)
-  // A MODÁL VÁLASZTÁS-INDEXE (fel/le nyíl). Külön state, NEM a panelben: a
-  // léptetés nem érinti a panel tartalmát vagy a dwell-horgonyt (armedAt), tehát
-  // egy panel-objektum újraírása itt csak zaj lenne — és a `armedAt` újraírásának
-  // KOCKÁZATA is megvan (a dwell-kapu végtelenül újraindítható lenne a nyíl
-  // nyomkodásával, pontosan ahogy a 'b'/Tab ágnál kimondtuk).
+  // THE MODAL CHOICE INDEX (up/down arrow). Separate state, NOT in the panel:
+  // stepping it doesn't touch the panel's content or the dwell anchor
+  // (armedAt), so rewriting a panel object here would just be noise — and
+  // rewriting `armedAt` carries a RISK too (the dwell gate could be restarted
+  // indefinitely by mashing the arrow, exactly as stated for the 'b'/Tab branch).
   const [choiceIndex, setChoiceIndex] = useState(0)
-  // (wf31/30) A `caveatOpen` STATE KIVEZETVE — HÁROM ÁLLAPOT HELYETT KETTŐ.
+  // (wf31/30) THE `caveatOpen` STATE RETIRED — TWO STATES INSTEAD OF THREE.
   //
-  // A user döntése: "az info panelben három állapota van a detailed infónak a
-  // main-nel szemben: idle (nincs infó, felajánlja a c-t), verdict collapsed, és
-  // verdict expanded. És az Enter itt foglalt. Ez így nem jó. KETTŐ állapot
-  // legyen. Idle és betöltött részletek. Igy felszabadul az Enter az info
-  // toggle-ra".
+  // The user's decision: "in the info panel, the detailed info has three
+  // states compared to main: idle (no info, offers c), verdict collapsed, and
+  // verdict expanded. And Enter is taken here. That's not right. Let there be
+  // TWO states. Idle and loaded details. That frees up Enter for the info
+  // toggle."
   //
-  // A mérési részletek MOSTANTÓL mindig kifejtve látszanak, ha van mérés — a
-  // teljes indoklás a render `caveatLines` fejénél áll. Az így felszabadult
-  // `Enter` a PANELT zárja (lásd a `key.return` ágát).
-  // A KÉT NÉZET a panel-állapotra. NEM külön state: SZÁRMAZTATOTT — így
-  // strukturálisan lehetetlen, hogy a kettő elcsússzon (a régi kód pont ettől
-  // hagyott orphan confirmot).
+  // Measurement details NOW always show expanded, if there's a measurement —
+  // the full rationale sits at the head of `caveatLines` in the render. The
+  // `Enter` freed up this way CLOSES THE PANEL (see the `key.return` branch).
+  // THE TWO VIEWS derive from panel state. NOT a separate state: DERIVED — so
+  // it's structurally impossible for the two to drift apart (the old code left
+  // an orphan confirm for exactly this reason).
   //
-  //   `modal` — a MEGERŐSÍTÉS adatai (kind/row/blockers/armedAt/summary/…). Ez az,
-  //     amit a régi `confirm` state hordozott, és a `confirmBody`/`confirmAccepts`
-  //     ma is ezt az alakot várja — tehát a szerződés VÁLTOZATLAN, csak a
-  //     tárolás egyesült.
-  //   `info`  — a panel INFO-nézete ({ row, progress }), ahogy az `infoBody` és a
-  //     progress-reducer várja.
+  //   `modal` — the CONFIRMATION data (kind/row/blockers/armedAt/summary/…).
+  //     This is what the old `confirm` state carried, and `confirmBody`/
+  //     `confirmAccepts` still expect this shape today — so the CONTRACT is
+  //     UNCHANGED, only the storage was merged.
+  //   `info`  — the panel's INFO view ({ row, progress }), as `infoBody` and
+  //     the progress reducer expect it.
   const modal = panel?.mode === 'modal' ? panel.modal : null
   const info = panel ? { row: panel.row, progress: panel.progress } : null
-  // A futó mérés handle-je (kill-hez). Ref-szerű state: NEM renderelünk belőle,
-  // csak abortálunk vele — ezért nem is triggerel újrarenderelést a beírása.
+  // Handle of the running measurement (for killing it). Ref-like state: we
+  // don't render from it, we only abort with it — so writing to it doesn't
+  // trigger a re-render either.
   const diagHandle = React.useRef(null)
-  // A LEGUTÓBBI AI-review MÉRT metaadata: { row, model, costUsd, sessionId,
-  // generated }. Azért state, mert a rá következő 'f' feltöltés ebből írja a
-  // body attribúcióját — a modellt MÉRTÜK, nem deklaráltuk, és a generált vs.
-  // megtartott arány a human-gate mérőszáma. PR-onként tartjuk: ha a user más
-  // sorra lép és ott töltene fel, az attribúció NEM vándorolhat át.
+  // THE MOST RECENT AI-review's MEASURED metadata: { row, model, costUsd,
+  // sessionId, generated }. It's state because the following 'f' upload
+  // writes the body's attribution from it — the model was MEASURED, not
+  // declared, and the generated-vs-kept ratio is the human-gate metric. Kept
+  // per PR: if the user moves to another row and uploads there, the
+  // attribution must NOT carry over.
   const [aiRun, setAiRun] = useState(null)
-  // A HIBA-OVERLAY állapota: { row, message }.
+  // THE ERROR OVERLAY's state: { row, message }.
   //
-  // MIÉRT NEM ELÉG A STATUS-SOR (a user 1. pontja névszerint felsorolja a
-  // hibaüzenetet): a dimmelt egysoros status a lista alján (a) EGY sorra
-  // csonkolja a több soros gh/git stderr-t, tehát a valódi ok nem is látszik, és
-  // (b) a KÖVETKEZŐ status-írás — akár egy sima j/k navigáció — nyomtalanul
-  // felülírja. Egy megtagadott merge vagy egy elhasalt approve így úgy néz ki,
-  // mintha meg sem történt volna. Az overlay MEGÁLLÍTJA a usert: nyugtázni kell.
+  // WHY THE STATUS LINE ISN'T ENOUGH (the user's point 1 names the error
+  // message explicitly): the dimmed one-line status at the bottom of the list
+  // (a) truncates multi-line gh/git stderr to one line, so the real cause
+  // doesn't even show, and (b) the NEXT status write — even a plain j/k
+  // navigation — silently overwrites it. A denied merge or a failed approve
+  // thus looks as if it never happened. The overlay STOPS the user: it must be
+  // acknowledged.
   //
-  // A status-sort NEM váltja ki, hanem KIEGÉSZÍTI: a status a rövid összefoglaló
-  // (az overlay bezárása után is olvasható marad), az overlay a teljes szöveg.
+  // It does NOT replace the status line, it SUPPLEMENTS it: the status is the
+  // short summary (still readable after the overlay closes), the overlay is
+  // the full text.
   const [errorState, setErrorState] = useState(null)
-  // Az EGYETLEN hiba-megjelenítő út. Minden hiba-ág ezen megy át, hogy a
-  // "status-sor + overlay" pár ne csúszhasson szét (az egyik ág overlayt nyit, a
-  // másik némán csak statust ír — pontosan ez volt a mért defekt).
+  // THE SINGLE error-display path. Every error branch goes through this, so
+  // the "status line + overlay" pair can't drift apart (one branch opening an
+  // overlay, the other silently only writing status — exactly the measured
+  // defect).
   const showError = useCallback((row, message) => {
-    const text = String(message ?? '').trim() || 'ismeretlen hiba'
-    // A status-sor az EGYSOROS összefoglaló (az overlay teljes szöveget mutat).
-    setNotice(`hiba: ${text.split('\n')[0]}`)
+    const text = String(message ?? '').trim() || 'unknown error'
+    // The status line is the ONE-LINE summary (the overlay shows the full text).
+    setNotice(`error: ${text.split('\n')[0]}`)
     setErrorState({ row: row ?? null, message: text })
   }, [])
 
@@ -1907,11 +1930,12 @@ export function App({
     if (actionLock.current) return false
     actionLock.current = true
     setBusy(true)
-    // (wf31/72) A PENDING SORA. `null`, ha az akció nem PR-hoz kötött (pl. `R`) —
-    // ilyenkor a lista nem jelöl semmit, ami helyes: nincs "hátrahagyott" sor.
+    // (wf31/72) THE PENDING ROW. `null` if the action isn't bound to a PR (e.g.
+    // `R`) — in that case the list marks nothing, which is correct: there is no
+    // "left behind" row.
     setPendingPr(Number.isInteger(prNumber) && prNumber > 0 ? prNumber : null)
-    // A PENDING-KULCS a `busy`-val EGYÜTT áll be és EGYÜTT tűnik el (lásd a
-    // `release`-t) — a kettő ugyanazt az állapotot írja le, tehát nem csúszhat szét.
+    // THE PENDING KEY is set TOGETHER with `busy` and disappears TOGETHER with it
+    // (see `release`) — the two describe the same state, so they can't drift apart.
     setPendingKey(typeof key === 'string' && key !== '' ? key : null)
     let released = false
     const release = () => {
@@ -1923,99 +1947,102 @@ export function App({
       setPendingPr(null)
     }
     try {
-      // (wf31/15) A PENDING-JELZÉS FLUSH-OLÁSA — ITT, EGY HELYEN, MINDEN AKCIÓRA.
+      // (wf31/15) FLUSHING THE PENDING SIGNAL — HERE, IN ONE PLACE, FOR EVERY ACTION.
       //
-      // A USER LELETE, szó szerint: "legyenek pending állapotok az appban.
-      // Például a review feltöltésénél se volt. Parancs kiadása utána azonnal
-      // legyen feedback."
+      // THE USER'S FINDING, verbatim: "there should be pending states in the app.
+      // For example there wasn't one when uploading the review either. Right
+      // after issuing a command there should be immediate feedback."
       //
-      // A MÉRT OK, amiért a `setBusy(true)` eddig NEM LÁTSZOTT: az akció-testek
-      // (`doUpload`, `doApprove`, `doMerge`) `async` függvények, de a BLOKKOLÓ
-      // hívásaik SPAWNSYNC-EK — `await` nélkül. Egy `async` függvény a legelső
-      // `await`-ig SZINKRONBAN fut, tehát a `setBusy(true)` és a `setBusy(false)`
-      // UGYANABBAN a szinkron blokkban zajlott le: a React sosem jutott
-      // render-flush-hoz, a "dolgozom…" nem jelent meg, és a UI 1-3 másodpercre
-      // NÉMÁN állt. Pontosan ezt a hibaosztályt írta le már az `askAiReview` és
-      // az `openReview` kommentje is — csak ott AKCIÓNKÉNT javítottuk
-      // (`await new Promise(r => setTimeout(r, 0))` a spawnok előtt), három
-      // másolatban.
+      // THE MEASURED REASON why `setBusy(true)` was NOT VISIBLE until now: the
+      // action bodies (`doUpload`, `doApprove`, `doMerge`) are `async` functions,
+      // but their blocking calls are SPAWNSYNCS — without `await`. An `async`
+      // function runs SYNCHRONOUSLY up to its very first `await`, so
+      // `setBusy(true)` and `setBusy(false)` happened WITHIN THE SAME sync
+      // block: React never got to a render flush, "working…" never appeared,
+      // and the UI stood SILENT for 1-3 seconds. This exact bug class was
+      // already described by the `askAiReview` and `openReview` comments — just
+      // fixed there PER ACTION (`await new Promise(r => setTimeout(r, 0))`
+      // before the spawns), in three copies.
       //
-      // MIÉRT A `runExclusive`-BAN, ÉS NEM AKCIÓNKÉNT: ez a KÖZÖS belépési pont
-      // MINDEN költő akcióra. Akciónként javítva egy ÚJ akció megírásakor
-      // ELFELEJTHETŐ a flush — és a hiba NÉMA (a UI működik, csak nem jelez),
-      // tehát senki nem veszi észre. Itt egyszer állva strukturálisan garantált.
+      // WHY IN `runExclusive`, AND NOT PER ACTION: this is the SHARED entry
+      // point for EVERY spending action. Fixed per action, the flush can be
+      // FORGOTTEN when a NEW action is written — and the bug is SILENT (the UI
+      // works, it just doesn't signal), so nobody notices. Fixed here once, it
+      // is structurally guaranteed.
       //
-      // A KÖLTSÉG EGY MACROTASK-TICK (~0 ms): a `setTimeout(0)` a már beállított
-      // `busy` state-tel együtt engedi lefutni a render-fát. Ez NEM lassítja az
-      // akciót érzékelhetően, viszont a leütés ELSŐ képkockáján megjelenik a
-      // visszajelzés.
-      // (wf31/42) AZ INK SAJÁT FLUSH-E, NEM `setTimeout(0)`.
+      // THE COST IS ONE MACROTASK TICK (~0 ms): `setTimeout(0)`, together with
+      // the already-set `busy` state, lets the render tree run. This does NOT
+      // noticeably slow the action, but the feedback appears on the FIRST frame
+      // after the keypress.
+      // (wf31/42) INK'S OWN FLUSH, NOT `setTimeout(0)`.
       //
-      // A `setTimeout(0)` csak a macrotask-queue-ba tett minket — nem garantálta,
-      // hogy a React COMMITOLT és az Ink KIÍRTA a frame-et. A
-      // `waitUntilRenderFlush` `reconciler.flushSyncWork()`-öt hív, megvárja a
-      // macrotaskot, és concurrent módban a következő render-commitot is: a
-      // pending-jelzés tehát BIZONYOSAN a képernyőn van, amikor a blokkoló munka
-      // indul. A user kérése ("flushSync-kel … rendereljen ki a pending UI, mielőtt
-      // elindul a folyamat") pontosan ezt kívánja.
+      // `setTimeout(0)` only got us onto the macrotask queue — it did not
+      // guarantee that React had COMMITTED and Ink had WRITTEN OUT the frame.
+      // `waitUntilRenderFlush` calls `reconciler.flushSyncWork()`, waits for the
+      // macrotask, and in concurrent mode for the next render commit too: the
+      // pending signal is thus CERTAINLY on screen when the blocking work
+      // starts. The user's request ("with flushSync … render the pending UI
+      // before the process starts") wants exactly this.
       //
-      // FAIL-SOFT: a flush dobhat (unmount közben), és egy dobás ITT az AKCIÓT
-      // vinné el egy visszajelzés kedvéért.
+      // FAIL-SOFT: the flush can throw (during unmount), and a throw HERE would
+      // take down the ACTION for the sake of a bit of feedback.
       try {
         await waitUntilRenderFlush()
-      } catch { /* a flush hibája nem akadályozhatja az akciót */ }
+      } catch { /* a failure in the flush must not block the action */ }
       await fn(release)
       return true
     } finally {
-      // A SORREND ITT IS SZÁMÍT: a lock elengedése UTÁN a busy — így nincs olyan
-      // pillanat, amikor a lock már szabad, de a UI még blokkoltnak látszik és
-      // egy befutó gomb a `busy` guardon halna el.
-      // IDEMPOTENS: ha a hívó már elengedte, ez no-op (nem "engedi el kétszer").
+      // ORDER MATTERS HERE TOO: releasing the lock comes AFTER busy — so there is
+      // no moment where the lock is already free but the UI still looks blocked
+      // and an incoming keypress dies on the `busy` guard.
+      // IDEMPOTENT: if the caller already released, this is a no-op (not "releases twice").
       release()
     }
-    // (wf31/42) A `waitUntilRenderFlush` A DEPS-BEN: az `useApp()` context-értéke
-    // az Ink oldalán stabil (a `render()` egyszer állítja be), de a HELYES lista
-    // enélkül hazug lenne — és egy jövőbeli Ink-verzió, ami újra-létrehozza, némán
-    // beragadt closure-t adna.
+    // (wf31/42) `waitUntilRenderFlush` IN THE DEPS: `useApp()`'s context value is
+    // stable on Ink's side (`render()` sets it once), but the CORRECT dependency
+    // list would be a lie without it — and a future Ink version that recreates
+    // it would silently produce a stuck closure.
   }, [waitUntilRenderFlush])
 
-  // A HUNK MEGNYITÁSA — ÉS A CACHE-ELT VÁLASZ-FINDINGOK BETÖLTÉSE (hibrid (c)).
+  // OPENING THE HUNK — AND LOADING CACHED ANSWER FINDINGS (hybrid (c)).
   //
-  // A `d` ÉS a panel r-ajánlata (kész review megnyitása) is EZEN az úton megy: a hunk megnyitásakor,
-  // ha a PR-hoz van MÉG BE NEM TÖLTÖTT válasz-finding, a session megjelenése
-  // után batch-apply tölti be őket (a hunk daemonja a broker: a futó TUI-ba a
-  // másik processzből írt komment MÉRVE megjelenik). A betöltés IDEMPOTENS: az
-  // `applied` flag (cache) jegyzi, tehát az ismételt megnyitás nem duplikál.
+  // BOTH `d` AND the panel's r-offer (opening a finished review) go through THIS
+  // path: when opening the hunk, if the PR has a NOT-YET-LOADED answer finding,
+  // it gets loaded via batch-apply once the session appears (the hunk daemon is
+  // the broker: a comment written from another process into the running TUI
+  // appears once MEASURED). The load is IDEMPOTENT: the `applied` flag (cache)
+  // records it, so a repeated open does not duplicate.
   //
-  // A pending-mentes út SZÁNDÉKOSAN bájtra a régi: se session-próba, se
-  // várakozás nem kerül bele — a `d` meglévő szerződése (és spawn-naplója) csak
-  // akkor bővül, ha tényleg van mit betölteni.
+  // The pending-free path is DELIBERATELY byte-identical to the old one: no
+  // session probe, no waiting is added — `d`'s existing contract (and spawn log)
+  // grows only when there is actually something to load.
   const openReview = useCallback(async (row, { agentNotes = false } = {}) => {
-    // (SESS-1, blocker) FUTÓ SESSION-ALIVE REVIEW ALATT A MEGNYITÁS BLOKKOLT.
+    // (SESS-1, blocker) OPENING IS BLOCKED WHILE A SESSION-ALIVE REVIEW IS RUNNING.
     //
-    // Az agent a SINGLETON hunk-sessionbe ír (session-alive prompt), a `d` /
-    // a panel-`d` / a done-életciklusú `r` viszont MIND ezen a chokepointon át
-    // reloadolná a session tartalmát egy másik diffre — az agent hátralévő
-    // `comment add`-jai így a ROSSZ PR diffje ellen landolnának, és a
-    // completion-kori halmaz-diff a reviewolt PR eredményeként könyvelné el
-    // őket (hamis horgony + hamis attribúció). Answer-only review
-    // (sessionAlive=false) alatt a session átváltása senkit nem bánt — ott a
-    // `d` szabad marad.
+    // The agent writes into the SINGLETON hunk session (session-alive prompt),
+    // while `d` / panel-`d` / the done-lifecycle `r` would ALL, through this
+    // chokepoint, reload the session's content against a different diff — the
+    // agent's remaining `comment add`s would then land against the WRONG PR's
+    // diff, and the completion-time set-diff would book them as the result of
+    // the reviewed PR (false anchor + false attribution). During an
+    // answer-only review (sessionAlive=false), switching the session hurts no
+    // one — there `d` stays free.
     if (aiHandle.current && aiLive.current?.sessionAlive === true) {
-      setNotice(`#${aiLive.current.pr}: futó AI-review használja a hunk-sessiont — `
-        + 'a megnyitás a review végéig blokkolva (x: megszakítás)')
+      setNotice(`#${aiLive.current.pr}: a running AI review is using the hunk session — `
+        + 'opening is blocked until the review ends (x: abort)')
       return
     }
-    // (wf24/4) AZONNALI JELZÉS A LEÜTÉS ELSŐ KÉPKOCKÁJÁN — a user leletе:
-    // "kész review esetén az »r« megnyomása még mindig nem reszponzív, és nem
-    // történik pending jelzés, hogy »betöltés…«". UGYANAZ A HIBAOSZTÁLY, amit
-    // az askAiReview-nál (6) már megoldottunk: a blokkoló spawnSync-ek
-    // (repo-gyökér, session-azonosító, hunk-indítás) a UI-flush ELŐTT futottak,
-    // tehát a UI némán állt pár másodpercig.
+    // (wf24/4) IMMEDIATE SIGNAL ON THE FIRST FRAME AFTER THE KEYPRESS — the
+    // user's finding: "pressing »r« on a finished review is still not
+    // responsive, and there's no pending signal saying »loading…«". THE SAME
+    // BUG CLASS we already fixed for askAiReview (6): the blocking spawnSyncs
+    // (repo root, session id, hunk launch) ran BEFORE the UI flush, so the UI
+    // stood silent for a couple of seconds.
     //
-    // A JELZÉS CSAK A REVIEW-MEGNYITÁS ÚTJÁN megy ki (van saját review-state a
-    // PR-on): a sima `d` (nyers diff) útja BÁJTRA a régi marad — ott nincs mit
-    // "betölteni", és egy hamis jelzés a `d` szerződését bontaná meg.
+    // THE SIGNAL GOES OUT ONLY ON THE REVIEW-OPEN PATH (the PR has its own
+    // review state): plain `d` (raw diff) stays BYTE-IDENTICAL to the old
+    // path — there is nothing to "load" there, and a false signal would break
+    // `d`'s contract.
     const signalsOpening = aiReview !== null && aiReview.pr === row.number
       && (aiReview.status === 'done' || aiReview.status === 'done-answer')
     const openingPrev = signalsOpening ? aiReview : null
@@ -3105,192 +3132,211 @@ export function App({
     diagHandle.current = null
   }, [])
 
-  // Az info-panel megnyitása: a gyors rész (queue-modell + CI-jelzések) AZONNAL
-  // látszik, és MÉRÉS NEM INDUL.
+  // Opening the info panel: the fast part (queue model + CI signals) shows
+  // IMMEDIATELY, and NO MEASUREMENT starts.
   //
-  // (wf31/10) A MEGNYITÁS TÖBBÉ NEM MÉR — a `c` kulcs (`measureConflict`) teszi. A
-  // teljes indoklás a mérés-indító ág helyén áll; a rövid alak: a kumulatív
-  // igazságot a next-gráf (`pedestal_prs`) és a CI-címkék már megadják, mérés
-  // nélkül, sőt ERŐSEBBEN (a CI kumulatív rebase-t végez, a lokális próba merge-öt
-  // szimulál). A megnyitáskori mérés tehát a legtöbb PR-on felesleges munka volt.
+  // (wf31/10) OPENING NO LONGER MEASURES — the `c` key (`measureConflict`) does.
+  // The full rationale lives at the measurement-launching branch; the short
+  // form: the cumulative truth is already given by the next-graph
+  // (`pedestal_prs`) and the CI labels, without measuring — and even MORE
+  // STRONGLY (the CI does a cumulative rebase, the local probe simulates a
+  // merge). So the on-open measurement was wasted work on most PRs.
   //
-  // A CACHE-TALÁLAT ÁGA VÁLTOZATLANUL ITT MARAD: ha van FRISS mért diagnózis, a
-  // panel azt megjeleníti. Az nem MÉRÉS, hanem a MÁR KIFIZETETT eredmény
-  // megmutatása — és elhallgatni pont az a csend lenne, amit a cache-találat-ág
-  // indoklása alább tilt.
+  // THE CACHE-HIT BRANCH STAYS UNCHANGED HERE: if there is a FRESH measured
+  // diagnosis, the panel displays it. That's not MEASURING, it's showing an
+  // ALREADY PAID-FOR result — and staying silent about it would be exactly the
+  // silence the cache-hit branch's rationale below forbids.
   //
-  // A STALE-VÉDELEM KÉT SZINTEN áll:
-  //   1) a core reducere eldobja a MÁS PR-számú eseményt (progressReducer),
-  //   2) az applyProgressToInfo ellenőrzi, hogy a state MÉG az a sor-e, amire a
-  //      mérés indult. A kettő nem redundáns: (1) a mérő oldali téves PR-t zárja
-  //      ki, (2) azt, hogy a user közben MÁS sorra nyitott panelt, és a régi
-  //      mérés callbackje az új panel state-jébe írna.
-  // MINDKÉT updater a helperen megy át — a döntés TISZTA függvényben él, hogy
-  // unit-tesztelhető legyen (korábban inline volt, és kivéve is zöld maradt).
+  // STALE PROTECTION HAS TWO LAYERS:
+  //   1) the core reducer drops events with a MISMATCHED PR number (progressReducer),
+  //   2) applyProgressToInfo checks that the state is STILL the row the
+  //      measurement was started for. The two are not redundant: (1) excludes
+  //      a wrong PR on the measuring side, (2) excludes the case where the
+  //      user meanwhile opened the panel on ANOTHER row, and the old
+  //      measurement's callback would write into the new panel's state.
+  // BOTH updaters go through the helper — the decision lives in a PURE
+  // function so it's unit-testable (it used to be inline, and stayed green
+  // even after being pulled out).
   const openInfo = useCallback((row) => {
     stopDiagnosis()
-    // (wf31/30) A CAVEAT-VISSZAÁLLÍTÁS KIESETT: nincs többé nyitott/csukott
-    // állapot, amit sor-váltáskor vissza kellene állítani (két állapot van: van
-    // mérés / nincs). A `caveatOpen` state kivezetésének indoklása a
-    // deklaráció helyén áll.
+    // (wf31/30) THE CAVEAT RESTORE DROPPED OUT: there's no longer an open/closed
+    // state that would need restoring on row switch (there are two states: has
+    // a measurement / doesn't). The rationale for retiring the `caveatOpen`
+    // state lives at its declaration.
     const infoModel = buildInfoModel({ row, progress: null })
     if (!infoModel.measurable) {
-      // Nincs mit mérni (stacked sor): a panel csak a gyors részt adja, mérés
-      // NEM indul — a talapzatra mért próba a talapzat conflictjait mutatná a
-      // stacked PR sajátjaként.
+      // Nothing to measure (stacked row): the panel only gives the fast part,
+      // NO measurement starts — a probe run against the pedestal would show
+      // the pedestal's conflicts as if they were the stacked PR's own.
       setPanel(panelOpen({ row, progress: null }))
       return
     }
-    // A CACHE-TALÁLAT: ha van MÉRT diagnózis, és a horgony (PR updatedAt +
-    // origin/main SHA) NEM mozdult el, a mérés NEM indul újra — a panel a
-    // cache-elt eredményt kapja. Ez a user 4. pontja: az `i` újranyitása ma
-    // újrafuttatta a merge-tree próbákat, és ezt zavarónak nevezte.
+    // THE CACHE HIT: if there is a MEASURED diagnosis, and the anchor (PR
+    // updatedAt + origin/main SHA) has NOT moved, the measurement does NOT
+    // restart — the panel gets the cached result. This is the user's point 4:
+    // reopening `i` used to re-run the merge-tree probes every time, and they
+    // called that disruptive.
     //
-    // A CACHE-TALÁLAT SEM LEHET CSENDES: a mért eredményt BE IS TESSZÜK a
-    // panelbe. Ha csak a mérést hagynánk el, a második megnyitás ÜRES mért-sávot
-    // adna — az rosszabb, mint az újramérés (a user "nincs conflict"-ként
-    // olvasná az üres sávot).
+    // THE CACHE HIT ALSO CANNOT BE SILENT: we ALSO put the measured result INTO
+    // the panel. If we only skipped the measurement, the second opening would
+    // give an EMPTY measured strip — that's worse than re-measuring (the user
+    // would read the empty strip as "no conflict").
     const anchor = cacheAnchor({ row, mainSha })
     const entry = cacheGet(cache.current, row.number, 'diagnosis')
     if (cacheEntryState(entry, anchor) === 'fresh') {
-      // A `progress` állapotot a MÉRT diagnózisból REKONSTRUÁLJUK, ugyanazon a
-      // reduceren keresztül, amit az élő stream használ — így a panel egyetlen
-      // alakot ismer, és a cache-elt kép nem tud eltérni a frissen mértétől.
+      // The `progress` state is RECONSTRUCTED from the measured diagnosis,
+      // through the SAME reducer the live stream uses — so the panel knows a
+      // single shape, and the cached picture can't diverge from a freshly
+      // measured one.
       const restored = progressReducer(
         { ...progressInit(row.number), total: entry.value?.probed ?? 0, done: entry.value?.probed ?? 0 },
         { event: 'result', pr: row.number, diagnosis: entry.value },
       )
       setPanel(panelOpen({ row, progress: restored }))
-      setNotice(`#${row.number}: a diagnózis a cache-ből (nem mértünk újra) — R: refresh`)
+      setNotice(`#${row.number}: diagnosis from cache (did not re-measure) — R: refresh`)
       return
     }
-    // (wf31/10) A PANEL-NYITÁS TÖBBÉ NEM MÉR. A user döntése: a conflict-mérés
-    // KÜLÖN UI PARANCSRA induljon (`c`), a panel megnyitása soha ne indítsa.
+    // (wf31/10) OPENING THE PANEL NO LONGER MEASURES. The user's decision: the
+    // conflict measurement should start on a SEPARATE UI command (`c`);
+    // opening the panel should never trigger it.
     //
-    // MIÉRT: a mérés a legtöbb PR-on FELESLEGES munka volt. A kumulatív igazságot
-    // ugyanis MÁR TUDJUK, mérés nélkül, KÉT forrásból:
-    //   (1) a `pedestal_prs` a next branch first-parent merge-commitjaiból olvassa
-    //       ki, mely PR-ok TÉNYLEGESEN beépültek (`merge: next <- #N`) — ebből lesz
-    //       a queue-nézet `queue` állapota;
-    //   (2) a CI a kieső PR-okat CÍMKÉZI (`next-conflict` / `next-blocked`).
-    // A rebuild MAGA IS kumulatív (`git rebase next "pr/N"` a next tetejére), tehát
-    // ami bent van a láncban, arról a CI már megmérte, hogy beépül — és ez ERŐSEBB
-    // tény, mint amit a lokális próba adni tud, mert a CI VALÓDI műveletét tükrözi.
-    // A lokális páros merge-tree ezzel szemben MERGE-öt szimulál (saját caveatje
-    // mondja ki), tehát ugyanarra a kérdésre BIZONYTALANABB választ adott —
-    // PR-onként `k-1` próbából, összesen O(N²)-ből.
+    // WHY: the measurement was WASTED work on most PRs. The cumulative truth is
+    // already known, without measuring, from TWO sources:
+    //   (1) `pedestal_prs` reads which PRs ACTUALLY got merged
+    //       (`merge: next <- #N`) from the next branch's first-parent merge
+    //       commits — this feeds the queue view's `queue` state;
+    //   (2) CI LABELS the PRs that drop out (`next-conflict` / `next-blocked`).
+    // The rebuild is ITSELF cumulative (`git rebase next "pr/N"` on top of
+    // next), so for anything that's in the chain, CI has already measured that
+    // it merges in — and that is a STRONGER fact than what the local probe can
+    // give, because it reflects CI's ACTUAL operation. The local pairwise
+    // merge-tree, by contrast, SIMULATES a merge (its own caveat says so),
+    // so it gave a LESS CERTAIN answer to the same question — `k-1` probes per
+    // PR, O(N²) in total.
     //
-    // AMI MEGMARAD A MÉRÉSNEK: a culprit-megnevezés ("KIVEL ütközöm, kire
-    // stackelhetek"). Azt sem a gráf, sem a címke nem mondja meg — a `next-conflict`
-    // csak annyit közöl, hogy kiestél. Ez viszont RITKA kérdés, és a user döntése
-    // szerint EXPLICIT gesztust érdemel, nem automatikus futást.
+    // WHAT'S LEFT FOR MEASUREMENT: naming the culprit ("WHO am I conflicting
+    // with, WHO can I stack on"). Neither the graph nor the label says that —
+    // `next-conflict` only says you dropped out. But that's a RARE question,
+    // and per the user's decision it deserves an EXPLICIT gesture, not an
+    // automatic run.
     //
-    // A MAIN-TENGELY IS A `c` MÖGÉ KERÜLT, noha az O(1) és MÁST mér (a main-nel
-    // ütközés blokkolja a landolást, ami a címkékből nem derül ki). A user kötelme
-    // egyértelmű volt — "next-conflict esetén is csak külön UI parancsra induljon
-    // vizsgálat" —, és egy megtartott automatikus main-próba pont azt hozná vissza,
-    // amit a döntés megszüntet: a panel-nyitás spawnol egy gyereket. A tengely
-    // NEM VESZETT EL: a `c` megméri, és a mért eredmény cache-elve marad.
+    // THE MAIN AXIS ALSO MOVED BEHIND `c`, even though it's O(1) and measures
+    // something DIFFERENT (a conflict with main blocks landing, which the
+    // labels don't reveal). The user's mandate was clear — "even on a
+    // next-conflict, only run the investigation on a separate UI command" —
+    // and a kept automatic main-probe would bring back exactly what the
+    // decision eliminates: opening the panel spawning a child. The axis is
+    // NOT lost: `c` measures it, and the measured result stays cached.
     setPanel(panelOpen({ row, progress: null }))
-    // (wf31/49) A FEJLÉC-NOTICE KIVEZETVE — KÉT MÉRT LELET EGY GYÖKERE.
+    // (wf31/49) THE HEADER NOTICE RETIRED — TWO MEASURED FINDINGS, ONE ROOT.
     //
-    // A user leletei: (1) "ez a felirat dimből fehérre vált pont akkor, amikor
-    // lenyílik egy info panel, és a fejléc dimmel"; (2) "ez a felirat nem reagál
-    // arra, ha a mérés megtörténik vagy megtörtént".
+    // The user's findings: (1) "this label flips from dim to white exactly when
+    // an info panel opens, and the header dims"; (2) "this label doesn't react
+    // to whether the measurement happened or has happened".
     //
-    // A GYÖKÉR MINDKETTŐRE UGYANAZ: ÁLLAPOT-információt tettünk EFEMER csatornába.
-    // A `notice` a fejléc jobb szélének egyszeri visszajelzése (wf31/23) — a
-    // következő akció felülírja, és NEM renderelődik újra a mérés eredményéből,
-    // tehát a "nem futott" mondat a mérés UTÁN is ott állt (2. lelet). A fejléc
-    // többi része közben `dimColor: frame ? true : undefined`-dal tompul a nyitott
-    // panel alatt, a notice viszont változatlan marad — az így megfordult kontraszt
-    // látszik "fehérre váltásnak" (1. lelet). A notice tehát pont ott emelkedik ki,
-    // ahol a fejléc szándékosan háttérbe húzódik.
+    // THE ROOT IS THE SAME FOR BOTH: we put STATE information on an EPHEMERAL
+    // channel. `notice` is the header's right-edge one-shot feedback (wf31/23)
+    // — the next action overwrites it, and it does NOT re-render from the
+    // measurement's result, so the "did not run" sentence was still there
+    // AFTER the measurement too (finding 2). Meanwhile the rest of the header
+    // dims via `dimColor: frame ? true : undefined` under the open panel, while
+    // the notice stays unchanged — this inverted contrast reads as "turned
+    // white" (finding 1). So the notice stands out exactly where the header is
+    // deliberately meant to recede.
     //
-    // ÉS NEM IS KELL: a panel MAGA már kimondja ugyanezt (`mt-hint` kulcs,
-    // "· main: nem mérve — c: mérés (…)"), a body-ban — ÁLLAPOTBÓL renderelve,
-    // tehát a mérés után magától átvált a mért eredményre, és a nyitott panel
-    // dimmelésével együtt mozog. A fejléc-példány tiszta duplikáció volt, a
-    // rosszabb csatornán.
+    // AND IT ISN'T EVEN NEEDED: the panel ITSELF already states the same thing
+    // (the `mt-hint` key, "· main: not measured — c: measure (…)"), in the
+    // body — rendered FROM STATE, so it switches to the measured result on its
+    // own after measuring, and moves together with the open panel's dimming.
+    // The header instance was pure duplication, on the worse channel.
     //
-    // EZ A wf31/23-AS ELV ALKALMAZÁSA: a hint a TRIGGERELŐ HELYRE tartozik (ahol a
-    // döntés születik), nem egy globális sávba.
+    // THIS IS THE wf31/23 PRINCIPLE APPLIED: the hint belongs at the
+    // TRIGGERING SITE (where the decision is made), not in a global strip.
   }, [bumpCache, mainSha, stopDiagnosis])
 
   /**
-   * (wf31/10) A CONFLICT-MÉRÉS EXPLICIT INDÍTÁSA — a `c` kulcs.
+   * (wf31/10) THE EXPLICIT LAUNCH OF THE CONFLICT MEASUREMENT — the `c` key.
    *
-   * MIÉRT KÜLÖN CALLBACK, ÉS NEM AZ `openInfo` EGY ÁGA: a két gesztus MÁS —
-   * a panel megnyitása INGYEN van (queue-modell + cache), a mérés viszont
-   * gyerek-processzt indít, és a queue-ban előtte álló MINDEN PR-ra merge-tree
-   * próbát futtat. A szétválasztás így nem csak kényelmi: a drága út EXPLICIT
-   * gesztus mögé kerül, ami ugyanaz az elv, ami a `d`/`r` (ingyen vs. token)
-   * párnál is áll.
+   * WHY A SEPARATE CALLBACK, AND NOT A BRANCH OF `openInfo`: the two gestures
+   * are DIFFERENT — opening the panel is FREE (queue model + cache), while the
+   * measurement spawns a child process and runs a merge-tree probe against
+   * EVERY PR ahead of it in the queue. So the split isn't just for
+   * convenience: the expensive path is placed behind an EXPLICIT gesture,
+   * the same principle that also holds for the `d`/`r` (free vs. token) pair.
    *
-   * A CACHE-T ITT IS TISZTELETBEN TARTJUK: ha van FRISS mért bejegyzés, a `c`
-   * NEM mér újra, csak beteszi a panelbe. Így a `c` ismételt leütése nem költ
-   * feleslegesen — az újramérés útja az `R` (teljes cache-invalidálás).
+   * THE CACHE IS RESPECTED HERE TOO: if there is a FRESH measured entry, `c`
+   * does NOT re-measure, it just puts it into the panel. So repeated presses
+   * of `c` don't spend needlessly — the re-measurement path is `R` (full
+   * cache invalidation).
    */
   const measureConflict = useCallback((row) => {
     if (row === null || row === undefined) return
     const infoModel = buildInfoModel({ row, progress: null })
     if (!infoModel.measurable) {
-      // STACKELT PR: nincs mit mérni (a sorsa a talapzatán dől el) — a próba a
-      // talapzat conflictjait mutatná a stacked PR sajátjaként.
-      setNotice(`#${row.number}: stackelt PR — nincs mit mérni, diagnosztizáld a talapzatot`)
+      // STACKED PR: nothing to measure (its fate is decided by its pedestal) —
+      // the probe would show the pedestal's conflicts as if they were the
+      // stacked PR's own.
+      setNotice(`#${row.number}: stacked PR — nothing to measure, diagnose the pedestal`)
       return
     }
     const anchor = cacheAnchor({ row, mainSha })
     const entry = cacheGet(cache.current, row.number, 'diagnosis')
     if (cacheEntryState(entry, anchor) === 'fresh') {
-      // MÁR MEGVAN, FRISSEN: beteszjük a panelbe, de NEM mérünk újra. A
-      // rekonstrukció ugyanazon a reduceren megy át, mint az élő stream — így a
-      // panel egyetlen alakot ismer.
+      // ALREADY THERE, FRESH: we put it into the panel, but do NOT re-measure.
+      // The reconstruction goes through the SAME reducer the live stream
+      // uses — so the panel knows a single shape.
       const restored = progressReducer(
         { ...progressInit(row.number), total: entry.value?.probed ?? 0, done: entry.value?.probed ?? 0 },
         { event: 'result', pr: row.number, diagnosis: entry.value },
       )
       setPanel((cur) => (cur === null ? cur : { ...cur, progress: restored }))
-      setNotice(`#${row.number}: a diagnózis a cache-ből (nem mértünk újra) — R: refresh`)
+      setNotice(`#${row.number}: diagnosis from cache (did not re-measure) — R: refresh`)
       return
     }
-    // EGY MÉRÉS FUT EGYSZERRE: a `stopDiagnosis` a régit lezárja, különben két
-    // blokkoló próba-sorozat versenyezne ugyanazért a cache-bejegyzésért.
+    // ONLY ONE MEASUREMENT RUNS AT A TIME: `stopDiagnosis` closes the old one,
+    // otherwise two blocking probe series would race for the same cache entry.
     stopDiagnosis()
-    // A `measuring` jelölés AZONNAL megy be, hogy a listán a `⋯` már a mérés
-    // alatt látszódjon — a "mérés fut" önálló állapot.
+    // The `measuring` mark goes in IMMEDIATELY, so the `⋯` already shows on the
+    // list while the measurement is running — "measurement running" is its own
+    // state.
     cacheMarkMeasuring(cache.current, row.number, 'diagnosis', { anchor })
     bumpCache()
     setPanel((cur) => (cur === null ? cur : { ...cur, progress: progressInit(row.number) }))
-    // (allapotgep-1) A HANDLE IDENTITÁSSAL ZÁRUL LE — az aiHandle mintája.
+    // (allapotgep-1) THE HANDLE CLOSES OUT BY IDENTITY — the `aiHandle` pattern.
     //
-    // A gyerek close-eseménye ASZINKRON: panel-navigációnál a stopDiagnosis +
-    // az új mérés indítása SZINKRON fut le, tehát a RÉGI mérés onExit-je mindig
-    // az ÚJ handle beírása UTÁN érkezik. Egy feltétel nélküli `diagHandle.current
-    // = null` itt az ÚJ mérés handle-jét dobná el: a mérés megszakíthatatlanná
-    // válik (Esc/q/R no-op), a gyerek a TUI-t is túlélő zombi merge-tree próba
-    // lesz, és az eredménye egy már bezárt kérdésre íródik a cache-be.
+    // The child's close event is ASYNCHRONOUS: on panel navigation,
+    // stopDiagnosis + starting the new measurement run SYNCHRONOUSLY, so the
+    // OLD measurement's onExit always arrives AFTER the NEW handle is written.
+    // An unconditional `diagHandle.current = null` here would drop the NEW
+    // measurement's handle: the measurement becomes unabortable (Esc/q/R
+    // become no-ops), the child becomes a zombie merge-tree probe that
+    // outlives the TUI too, and its result gets written to the cache for a
+    // question that's already closed.
     const handle = startProgressDiagnosis(row.number, {
       onEvent(ev) {
         setPanel((cur) => applyProgressToPanel(cur, row.number, ev))
-        // A MÉRT DIAGNÓZIS a cache-be is bekerül — a HORGONNYAL, amivel a mérés
-        // INDULT (nem a mostanival): ha a main közben elmozdult, a bejegyzés
-        // azonnal elavultnak minősül, ami IGAZ — a próba a régi main ellen mért.
+        // The MEASURED DIAGNOSIS also goes into the cache — with the ANCHOR the
+        // measurement STARTED with (not the current one): if main has since
+        // moved, the entry immediately counts as stale, which is TRUE — the
+        // probe measured against the old main.
         if (ev.event === 'result' && ev.diagnosis && typeof ev.diagnosis === 'object') {
-          // MÁSODIK VÉDVONAL, de a HATÁRA MÉRT — ne bízz benne egyedül.
+          // SECOND LINE OF DEFENSE, but its BOUNDARY IS MEASURED — don't rely on
+          // it alone.
           //
-          // Az ABORT elleni ELSŐ (és a race-t VALÓBAN lezáró) védvonal a
-          // FORRÁSNÁL van: `startProgressDiagnosis` abort után egyáltalán nem ad
-          // tovább eseményt. MIÉRT nem elég ez a guard helyette: mérés szerint a
-          // késői `data:result` az `onExit`-et MEGELŐZI
-          // (`data:start -> data:result -> close(onExit)`), tehát abban a
-          // pillanatban a bejegyzés MÉG `measuring: true` — ez a guard ott NEM
-          // fogna. Amit lefed: a `measuring` nélküli állapotok (már lezárt
-          // hibás/abortált bejegyzés, vagy egy `R` általi invalidálás után
-          // beérkező elkésett `result`) — azokra a késői érték nem írhat "készt".
+          // The FIRST line of defense against an abort (and the one that
+          // ACTUALLY closes the race) is AT THE SOURCE:
+          // `startProgressDiagnosis` doesn't emit any further event after an
+          // abort. WHY this guard alone isn't enough: per measurement, the late
+          // `data:result` PRECEDES `onExit`
+          // (`data:start -> data:result -> close(onExit)`), so at that moment
+          // the entry is STILL `measuring: true` — this guard wouldn't catch it
+          // there. What it DOES cover: states without `measuring` (an
+          // already-closed error/aborted entry, or a late `result` arriving
+          // after an `R` invalidation) — the late value must not mark those as
+          // "done" either.
           //
-          // A guard azért van ITT is, mert a cache-írás a legdrágább állítás: a
-          // lista `✓`-ja alapján landol a user.
+          // The guard is HERE too because the cache write is the most expensive
+          // assertion: the user lands based on the list's `✓`.
           const cur = cacheGet(cache.current, row.number, 'diagnosis')
           if (cur?.measuring !== true) return
           cachePut(cache.current, row.number, 'diagnosis', { value: ev.diagnosis, anchor })
@@ -3298,18 +3344,19 @@ export function App({
         }
       },
       onExit(res) {
-        // CSAK A SAJÁT handle-t engedjük el (identitás-guard): egy elavult
-        // futás lezárása nem nullázhatja egy ÚJABB mérés fogantyúját. A `close`
-        // aszinkron, tehát a `handle` const-ja itt már mindig fel van töltve.
+        // We only release OUR OWN handle (identity guard): a stale run closing
+        // out must not null out a NEWER measurement's handle. `close` is
+        // asynchronous, so the `handle` const here is always already filled in.
         if (diagHandle.current === handle) diagHandle.current = null
-        // A HIBA HANGOS: a `close`/`error` ág hibáját eseményként injektáljuk az
-        // állapotgépbe, hogy a panel ne "mér…" állapotban maradjon örökre. Az
-        // abortált mérés viszont NEM hiba — ott a felhasználó döntött.
+        // THE ERROR IS LOUD: we inject the `close`/`error` branch's error as an
+        // state machine, so the panel doesn't stay stuck at "measuring…"
+        // forever. An aborted measurement, though, is NOT an error — there the
+        // user made the decision.
         if (!res?.error) {
-          // A `measuring` jelölést MINDEN kimeneten le kell zárni, a sikeres
-          // úton is: ha a `result` esemény meg sem jött (abortálás, csonka
-          // kimenet), a sor örökre "mér…" jelzővel állna a listán — hazug
-          // állapot, és a user hiába várna rá.
+          // The `measuring` mark must be closed out on EVERY outcome, including
+          // the success path: if the `result` event never arrived (abort,
+          // truncated output), the row would sit on the list marked "measuring…"
+          // forever — a false state the user would wait on in vain.
           const cur = cacheGet(cache.current, row.number, 'diagnosis')
           if (cur?.measuring === true) {
             cachePut(cache.current, row.number, 'diagnosis', { aborted: true, anchor })
@@ -3317,8 +3364,8 @@ export function App({
           }
           return
         }
-        // HIBÁRA a bejegyzés `error`-ral zárul: NEM lesz "kész" pipa (nincs mért
-        // eredmény), és a sor újramérhető.
+        // ON ERROR the entry closes out with `error`: there's no "done" check
+        // mark (no measured result), and the row can be re-measured.
         cachePut(cache.current, row.number, 'diagnosis', { error: res.error, anchor })
         bumpCache()
         setPanel((cur) =>
@@ -3329,14 +3376,16 @@ export function App({
     diagHandle.current = handle
   }, [bumpCache, mainSha, stopDiagnosis])
 
-  // Ha a komponens unmountol (kilépés) a mérés közben, a childot ott is meg kell
-  // ölni: enélkül a `q` után hátramaradna egy futó merge-tree próba-sorozat.
+  // If the component unmounts (exit) while a measurement is running, the child
+  // must be killed there too: otherwise a running merge-tree probe series
+  // would be left behind after `q`.
   useEffect(() => stopDiagnosis, [stopDiagnosis])
 
-  // UGYANEZ A HÁTTÉR-REVIEW-RA. A `q` (exit) a `useInput`-ban abortál, DE az
-  // unmount MÁS úton is bekövetkezhet (Ctrl+C, a szülő leszerelése, hiba) — és
-  // egy detachelt `claude -p` olyan hunk-sessionbe írna, amit már senki nem néz
-  // át. A két út együtt zárja ki a zombie-t.
+  // THE SAME FOR THE BACKGROUND REVIEW. `q` (exit) aborts it in `useInput`, BUT
+  // the unmount can also happen via OTHER paths (Ctrl+C, the parent
+  // unmounting, an error) — and a detached `claude -p` would write into a hunk
+  // session nobody is looking at anymore. The two paths together rule out the
+  // zombie.
   useEffect(() => stopAiReview, [stopAiReview])
 
   // --- A HÁTTÉR-POLL TICKJE -------------------------------------------------
@@ -3636,89 +3685,90 @@ export function App({
 
   // A merge a MEGLÉVŐ non-interaktív utat hívja (`tuipr merge <PR> --yes`).
   //
-  // MIÉRT NEM `gh pr merge` KÖZVETLENÜL (korábban az volt, és ez bug volt):
-  // a landolásnak három olyan lépése van, ami CSAK a bash cmd_merge-ben él —
-  //   1) a metódus levezetése a branch-prefixből (nem-konvencionális név → megtagadás),
-  //   2) a REPO-ENGEDÉLY friss verifikációja (allow_*_merge; a gh hibaüzenete nem beszédes),
-  //   3) az állapot-gate (CONFLICTING / BEHIND-rebase-gate / BLOCKED-blokkoló-lista),
-  //      plusz a `--delete-branch` prefix-konvenciója.
-  // Közvetlen gh-hívással a TUI-ból landolva MÁS történt, mint a CLI-ből: a
-  // gate megkerült, és a ticketes branch törlése/megtartása véletlenszerű lett.
-  // A `--yes` itt jogos: a dwell-kapus confirm-overlay MÁR megerősítette.
-  // A `runExclusive` itt is (lásd a doApprove-nál): try/finally nélkül egy dobás
-  // VÉGLEG beragasztotta a `busy`-t.
+  // WHY NOT `gh pr merge` DIRECTLY (that was the earlier approach, and it was a bug):
+  // landing has three steps that live ONLY in the bash cmd_merge —
+  //   1) deriving the method from the branch prefix (non-conventional name → refusal),
+  //   2) fresh verification of the REPO PERMISSION (allow_*_merge; gh's error message isn't verbose),
+  //   3) the status gate (CONFLICTING / BEHIND rebase-gate / BLOCKED blocklist),
+  //      plus the `--delete-branch` prefix convention.
+  // Landing via a direct gh call from the TUI did something DIFFERENT than from the CLI: the
+  // gate was bypassed, and deleting/keeping the ticket branch became random.
+  // The `--yes` here is legitimate: the dwell-gated confirm overlay ALREADY confirmed it.
+  // `runExclusive` here too (see doApprove): without try/finally, a throw
+  // would PERMANENTLY stick `busy`.
   const doMerge = useCallback((row) => runExclusive(async () => {
     const res = spawnSync(
       'bash',
       [new URL('tuipr.sh', import.meta.url).pathname, 'merge', String(row.number), '--yes'],
       { encoding: 'utf8' },
     )
-    // ENOENT külön (lásd a doApprove-nál): a bash/script indíthatatlansága MÁS
-    // diagnózis, mint egy gate által megtagadott merge.
-    if (res.error) showError(row, `a merge nem indítható (${res.error.code ?? 'spawn hiba'}): ${res.error.message}`)
-    else if (res.status !== 0) showError(row, `merge hiba: ${(res.stderr || res.stdout || '').trim() || `exit ${res.status}`}`)
+    // ENOENT separately (see doApprove): the bash/script being unlaunchable is a DIFFERENT
+    // diagnosis than a merge refused by a gate.
+    if (res.error) showError(row, `merge could not start (${res.error.code ?? 'spawn error'}): ${res.error.message}`)
+    else if (res.status !== 0) showError(row, `merge error: ${(res.stderr || res.stdout || '').trim() || `exit ${res.status}`}`)
     else {
       setNotice(`#${row.number}: merged (${row.mergeMethod})`)
-      // (wf31/25) OPTIMISTA JELÖLÉS: a sor AZONNAL `✔ merged`-re vált és lehalkul,
-      // nem várunk a GitHub aszinkron indexére (lásd az `optimistic` state fejét).
+      // (wf31/25) OPTIMISTIC MARKING: the row switches to `✔ merged` IMMEDIATELY and dims,
+      // we don't wait for GitHub's async indexing (see the `optimistic` state's doc head).
       setOptimistic((cur) => ({ ...cur, [row.number]: 'merged' }))
     }
     reload()
   }, 'm', row?.number), [reload, runExclusive, showError])
 
   useInput((input, key) => {
-    // A USER-INPUT ÓRÁJA (a poll (c) kapuja) MINDEN gombnyomásra újraindul —
-    // MÉG A `busy` KORAI VISSZATÉRÉS ELŐTT.
+    // THE USER-INPUT CLOCK (the poll (c) gate) restarts on EVERY keypress —
+    // EVEN BEFORE the `busy` early return.
     //
-    // MIÉRT ITT, A LEGELSŐ SORBAN: a `busy` alatt leütött gomb is USER-JELENLÉT.
-    // Ha az óra csak a feldolgozott gombnyomásokra indulna újra, akkor egy hosszú
-    // akció (merge) alatt türelmetlenül nyomkodó user gépén a poll idle-be
-    // eshetne — miközben a user ott ÜL. A kapu a JELENLÉTET méri, nem a
-    // hasznos gombnyomásokat.
+    // WHY HERE, ON THE VERY FIRST LINE: a key pressed during `busy` is ALSO USER PRESENCE.
+    // If the clock only restarted on processed keypresses, then on the machine of an
+    // impatient user mashing keys during a long action (merge), the poll could fall
+    // idle — while the user is SITTING there. The gate measures PRESENCE, not
+    // useful keypresses.
     //
-    // A REF-ÍRÁS NEM RENDEREL: az óra léptetése nem UI-esemény, tehát nem is
-    // okozhat rendert (különben minden gombnyomás kétszer renderelne).
+    // WRITING A REF DOES NOT RENDER: stepping the clock is not a UI event, so it can't
+    // cause a render either (otherwise every keypress would render twice).
     poll.current = pollNoteInput(poll.current, { now: now() })
 
-    // (wf31/56) AZ INPUT VÉGÁLLAPOTBA UGRASZTJA A FADE-ET — a user kikötése:
-    // "input esetén az animációkat végállapotba tenni".
+    // (wf31/56) INPUT SNAPS THE FADE TO ITS END STATE — the user's requirement:
+    // "on input, put animations into their end state".
     //
-    // MIÉRT A LEGELEJÉN, A `busy`-GUARD ELŐTT: ez nem akció, hanem az animáció
-    // LEZÁRÁSA. Egy `busy` alatt leütött gomb is azt jelenti, hogy a user MOST
-    // néz a képre — a fade félúton hagyva ott villogtatná az átmenet-színt.
+    // WHY AT THE VERY START, BEFORE THE `busy` GUARD: this isn't an action, it's the
+    // CLOSING of the animation. A key pressed during `busy` also means the user is
+    // LOOKING at the screen right now — leaving the fade halfway would flash the
+    // transition color there.
     //
-    // MIÉRT KELL EGYÁLTALÁN: a fade és a kurzormozgás UGYANARRA a felületre ír. Ha
-    // egy `j` a fade közben érkezik, két állapot versenyez ugyanazon a soron — a
-    // hunk-váltásnál MÉRT "kiszámíthatatlan" élmény pontosan ebből a fajta
-    // versenyből jött (wf31/46-51). A végállapotba ugrás ezt STRUKTURÁLISAN
-    // kizárja: az input pillanatában az animáció már nem létezik.
+    // WHY THIS IS NEEDED AT ALL: the fade and the cursor movement write to the SAME
+    // surface. If a `j` arrives mid-fade, two states race on the same row — the
+    // "unpredictable" experience MEASURED at hunk-switching came from exactly this kind
+    // of race (wf31/46-51). Snapping to the end state STRUCTURALLY rules this out:
+    // at the moment of input, the animation no longer exists.
     //
-    // A HÍVÁS IDEMPOTENS (a setter no-op, ha már a végállapotban vagyunk), tehát
-    // nem renderel feleslegesen minden gombnyomásra.
+    // THE CALL IS IDEMPOTENT (the setter is a no-op if already at the end state), so
+    // it doesn't render needlessly on every keypress.
     finishFade()
 
-    // A DUPLA-`x` ÉLESÍTÉSÉNEK VISSZAVONÁSA: BÁRMELY MÁS gomb (navigáció is)
-    // hatástalanítja az armot — az élesített állapot nem ragadhat be. A
-    // funkcionális setter no-op, ha nincs arm (nem renderel feleslegesen).
+    // UNDOING THE DOUBLE-`x` ARMING: ANY OTHER key (navigation too)
+    // disarms it — the armed state can't get stuck. The functional setter is a no-op
+    // if there's no arm (doesn't render needlessly).
     if (input !== 'x') setXArm((cur) => (cur === null ? cur : null))
 
-    // A DUPLA-`x` KÖZÖS KEZELŐJE — a panel-ág ÉS a lista-ág is ezt hívja, hogy
-    // az élesítés-szabály (első x: élesít, második: végrehajt, kind-egyezéssel)
-    // ne két másolatban éljen. FUTÓ review: abort; KÉSZ review: elvetés (a
-    // cache-elt findingok törlése — a review-NYOM marad, lásd a core
-    // cacheDiscardAiFindings fejét); egyébként a régi "nincs mit megszakítani".
+    // THE SHARED HANDLER FOR DOUBLE-`x` — both the panel branch AND the list branch
+    // call this, so the arming rule (first x: arms, second: executes, matched by kind)
+    // doesn't live in two copies. RUNNING review: abort; DONE review: discard (deletes
+    // the cached findings — the review TRACE remains, see the core
+    // cacheDiscardAiFindings doc head); otherwise the old "nothing to abort".
     const xKey = (r) => {
       const pr = r ? r.number : null
       if (aiHandle.current) {
         if (xArm?.kind === 'abort') {
           setXArm(null)
-          // A `'user'` OK: EZ AZ EGYETLEN ÚT, ami az `aborted` végállapotot
-          // adja (a kilépés `'exit'`-et, a watchdog `'timeout'`-ot ad).
+          // The `'user'` value: THE ONLY PATH that produces the `aborted` end state
+          // (exit produces `'exit'`, the watchdog produces `'timeout'`).
           stopAiReview('user')
           return
         }
         setXArm({ pr, kind: 'abort' })
-        setNotice('x: megszakítás megerősítése — még egy x megszakítja a futó AI-review-t')
+        setNotice('x: confirm abort — one more x aborts the running AI review')
         return
       }
       const pending = pr === null ? null : cacheAiFindings(cache.current, pr)
@@ -3727,33 +3777,33 @@ export function App({
         if (xArm?.kind === 'discard' && xArm.pr === pr) {
           setXArm(null)
           cacheDiscardAiFindings(cache.current, pr)
-          // (1d) A LEMEZRŐL IS: az elvetés a user EXPLICIT döntése (dupla-`x`),
-          // és az `r` újraindításának előfeltétele. Ha a lemezen maradna, a
-          // következő indításban a findingok visszatérnének — a szándékos
-          // súrlódás (véletlen dupla-költés ellen) némán kiürülne.
+          // (1d) FROM DISK TOO: the discard is the user's EXPLICIT decision (double `x`),
+          // and a precondition for restarting via `r`. If it stayed on disk, the
+          // findings would come back on the next start — the intentional
+          // friction (against accidental double-spend) would silently drain away.
           forgetReview(pr)
           bumpCache()
-          // Az elvetés után az `r` újra INDÍTÁST jelent — a state is törlődik.
+          // After a discard, `r` again means STARTING — the state is cleared too.
           setAiReview((cur) => (cur && cur.pr === pr ? null : cur))
-          // A TÉNY + A KÖVETKEZŐ LÉPÉS, belső fogalmak nélkül. A „review-nyom
-          // megmaradt" a cache könyvelését magyarázta (a user nem ebből dolgozik),
-          // az `r` viszont VALÓDI információ: innentől újra indítható a review.
-          setNotice(`#${pr}: a review elvetve — r: új review indítása`)
+          // THE FACT + THE NEXT STEP, without internal concepts. The "review trace
+          // remained" explained the cache's bookkeeping (the user doesn't work from that),
+          // while `r` is REAL information: the review can be started again from here.
+          setNotice(`#${pr}: review discarded — r: start a new review`)
           return
         }
-        // Az élesítés PR-HOZ KÖTÖTT: más sor armja itt nem hajt végre, hanem
-        // erre a sorra élesít újra.
+        // Arming is BOUND TO THE PR: another row's arm doesn't execute here, but
+        // re-arms for this row.
         setXArm({ pr, kind: 'discard' })
-        // (wf31/12) A SZÖVEG A CACHE-RE VALÓ HIVATKOZÁS NÉLKÜL. A user lelete a
-        // kivezetett status-sorról: a cache egy implementációs részlet, amiről nem
-        // kell szájbarágni. Ami a usernek szól: MI TÖRTÉNIK a második `x`-re.
-        setNotice(`#${pr}: még egy x elveti a review-t`)
+        // (wf31/12) THE TEXT WITHOUT REFERENCING THE CACHE. The user's finding was about
+        // the exposed status line: the cache is an implementation detail that doesn't
+        // need spelling out. What matters to the user: WHAT HAPPENS on the second `x`.
+        setNotice(`#${pr}: one more x discards the review`)
         return
       }
-      // NINCS FUTÓ REVIEW ÉS NINCS ELVETHETŐ EREDMÉNY: az `x` nem dead key,
-      // hanem KIMONDJA, hogy nincs mit megszakítani (a régi szerződés).
+      // NO RUNNING REVIEW AND NO DISCARDABLE RESULT: `x` isn't a dead key,
+      // it SAYS OUT LOUD that there's nothing to abort (the old contract).
       setXArm(null)
-      setNotice('nincs futó AI-review, amit meg lehetne szakítani')
+      setNotice('no running AI review to abort')
     }
 
     // A KÉT GUARD EGYÜTT, és MINDKETTŐ kell:

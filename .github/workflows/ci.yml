@@ -1,0 +1,48 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    # A mátrix nem dísz: a tool git/gh alfolyamatokra és a terminál átadására
+    # épül, és pontosan ezek térnek el platformonként. A Linux-ág egy ismert,
+    # valós eltérést fed le — a `script(1)` argumentumai a BSD és a GNU
+    # változatban különböznek.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # A `npm ci` a lockfile-t követeli meg, nem oldja fel újra a
+      # verziótartományokat — a CI így azt a fát méri, ami a fejlesztőnél van.
+      - run: npm ci
+
+      - name: Tests
+        run: npm test
+
+      # A belépési pont TTY nélkül indul itt: a helyes viselkedés az, hogy
+      # felismeri és megmondja, nem az, hogy elhasal vagy némán kilép. Ez az
+      # ág élesben egyszer már 0 bájt kimenettel, exit 0-val halt meg, ezért
+      # kap külön ellenőrzést.
+      - name: Entry point reports the missing TTY instead of dying silently
+        run: |
+          set +e
+          output=$(node bin/tuipr.mjs 2>&1)
+          status=$?
+          set -e
+          echo "exit=$status output=$output"
+          if [ -z "$output" ]; then
+            echo "A belépési pont NÉMÁN tért vissza — ez a hibaosztály tilos." >&2
+            exit 1
+          fi
