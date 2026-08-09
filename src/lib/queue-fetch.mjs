@@ -70,7 +70,35 @@ export async function fetchQueueAsync() {
  * `gh pr diff | hunk patch -` path).
  * Returns: [baseRef, headRef].
  */
+/**
+ * Is this checkout a shallow clone?
+ *
+ * WHY IT IS WORTH ASKING BEFORE FETCHING A PR: a shallow clone has no common
+ * ancestor to compute, so the `base...head` range the diff viewer is given
+ * cannot resolve. What the user sees is the viewer's own complaint — "no merge
+ * base" — flashed for a fraction of a second before the list returns. Every
+ * word of it is true and none of it says what to do, or that the repository
+ * (not the tool, and not the PR) is the thing that is unusual.
+ *
+ * This is not an exotic setup: `--depth 1` is the default in most CI
+ * checkouts, and it is what an impatient clone of a large repository looks
+ * like too. It cost an hour here before someone read the flash.
+ */
+function isShallowRepo() {
+  const res = spawnSync('git', ['rev-parse', '--is-shallow-repository'], { encoding: 'utf8' })
+  // UNKNOWN IS NOT SHALLOW: if git cannot be asked, we do not invent a
+  // diagnosis — the later failure will report itself in its own words.
+  if (spawnFailure(res, 'git') || res.status !== 0) return false
+  return (res.stdout || '').trim() === 'true'
+}
+
 export function fetchPrRefs(pr, remote = 'origin') {
+  if (isShallowRepo()) {
+    throw new Error(
+      'this is a shallow clone, so there is no common ancestor to diff against. '
+      + 'Run `git fetch --unshallow` (or clone without --depth) and try again.',
+    )
+  }
   const ref = `refs/tuipr/pr/${pr}`
   const fetched = spawnSync('git', ['fetch', '-q', remote, `pull/${pr}/head:${ref}`], { encoding: 'utf8' })
   const fetchSpawnErr = spawnFailure(fetched, 'git')
