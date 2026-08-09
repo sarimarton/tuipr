@@ -400,9 +400,13 @@ export { STACK_MARK }
 
 // --- Layout: the title column's budget --------------------------------------
 
-// The per-row fixed part: cursor(2) + "#" + number(5) + space + author(5) +
-// space + the space after the title ≈ 16 cells, plus 2 cells right margin.
-const ROW_FIXED_W = 16
+// The per-row fixed part: cursor(2) + "#" + number(5) + space + author(10) +
+// space + the space after the title ≈ 21 cells, plus 2 cells right margin.
+//
+// THIS MUST MOVE WITH THE RENDERER'S AUTHOR WIDTH. Two numbers describing one
+// column is exactly the drift this file warns about elsewhere; if the author
+// column changes there, it changes here, in the same commit.
+const ROW_FIXED_W = 21
 const ROW_MARGIN_W = 2
 
 /** The width of a row's status tail at the given degradation level. */

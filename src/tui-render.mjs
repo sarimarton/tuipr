@@ -259,7 +259,19 @@ export function Row({
   //     the row, not the focus, so it applies to the cursor too: a selected,
   //     merged row is also shown quietly — highlighting it would suggest
   //     there's still something to do with it.
+  // A DRAFT IS DIMMED TOO, for the same reason a merged row is: there is
+  // nothing to do with it. Only its status label used to be grey while its
+  // number and title burned at full brightness, so on a real queue eleven of
+  // the first twenty-six rows competed for attention with the ones you can
+  // actually act on. This tool exists to answer "what should I look at next";
+  // leading with rows that are not an answer works against that.
+  //
+  // UNLIKE `settled`, THE SELECTED ROW IS EXEMPT. A merged row stays quiet even
+  // under the cursor because its fate is final. A draft's is not — it becomes
+  // reviewable later, and the user may well want to open its panel now — so
+  // dimming it under the cursor would only make the cursor hard to find.
   const faded = (dimmed && !selected) || row.settled === true
+    || (row.isDraft === true && !selected)
   const dim = faded || undefined
   // THE ROW'S OWN TWEEN POSITION. A `settled` (merged) row is PINNED to the
   // END STATE: it was already dim BEFORE the panel opened — if it got the
@@ -364,7 +376,12 @@ export function Row({
     { text: cursor, color: selected ? 'cyan' : undefined },
     { text: indentPrefix, dimOverride: dim || !row.selectable },
     { text: `#${String(row.number).padEnd(5)} `, bold: selected },
-    { text: `${String(row.author).slice(0, 5).padEnd(5)} `, color: 'magenta' },
+    // TEN CELLS, NOT FIVE. Five turned every author into a stump — `app/c`,
+    // `Iron-`, `SebTa` — which is worse than showing nothing: it looks like
+    // information and carries none. Ten fits the majority of GitHub handles
+    // whole, and costs five cells of title, which the title budget absorbs
+    // (see ROW_FIXED_W, kept in step with this).
+    { text: `${String(row.author).slice(0, 10).padEnd(10)} `, color: 'magenta' },
     { text: `${title} ` },
     { text: row.mark.label, color: row.mark.color },
     // (wf31/52) THE CONFLICT-AXIS INDICATORS NEXT TO THE MARK, BEFORE THE

@@ -711,12 +711,25 @@ export function startProgressDiagnosis(pr, { onEvent, onExit, spawn: spawnImpl =
   child.stderr?.setEncoding('utf8')
   child.stderr?.on('data', (chunk) => { stderr += chunk })
 
+  // THE SCRIPT IS SIMPLY NOT PART OF THIS BUILD, and saying so beats reporting
+  // a crash. The measurement runs a script that has not been generalized yet
+  // (see ROADMAP, "What still calls the original script"). Without this branch
+  // the user is told "the measurer crashed (exit 127)" followed by an absolute
+  // path — every word true, and none of it answering the only question they
+  // have, which is whether they broke something. They did not; the feature is
+  // not here yet.
+  // KEPT SHORT ON PURPOSE: the panel clamps this line to the frame width, and a
+  // sentence that gets cut off mid-word answers nothing. The line below it
+  // ("the measurement did NOT run") already carries the warning, so this only
+  // has to say why.
+  const MISSING_MEASURER = 'not wired up in this build yet — see ROADMAP'
+
   child.on('error', (error) => {
     // ENOENT separate: "bash not found" is NOT the same as a crashed
     // measurement.
     finish({
       error: error?.code === 'ENOENT'
-        ? `the measurer cannot be started (ENOENT): bash or ${NEXT_SH} was not found`
+        ? MISSING_MEASURER
         : `the measurer cannot be started: ${error?.message ?? String(error)}`,
     })
   })
@@ -729,7 +742,12 @@ export function startProgressDiagnosis(pr, { onEvent, onExit, spawn: spawnImpl =
     finish({
       error: code === 0
         ? 'the measurer returned 0, but did not give a `result` event — the output is truncated'
-        : `the measurer crashed (exit ${code}): ${stderr.trim() || 'no stderr'}`,
+        // Exit 127 is the shell's own "command not found": bash started, the
+        // script did not exist. Same situation as the ENOENT above, reached by
+        // a different route, so it gets the same answer.
+        : code === 127
+          ? MISSING_MEASURER
+          : `the measurer crashed (exit ${code}): ${stderr.trim() || 'no stderr'}`,
     })
   })
 

@@ -4545,7 +4545,23 @@ export function App({
       setNotice('exit cancelled — the AI review keeps running')
       return
     }
-    if (input === 'q' || key.escape) {
+    // ESC DOES NOT QUIT FROM THE BARE LIST — ONLY `q` DOES.
+    //
+    // Esc used to quit here, and that is a hostile surprise. Everywhere else in
+    // this app Esc means "back out of what I just opened": it closes the modal,
+    // then the panel, then the resolution offer. A key that means "cancel" four
+    // times and "throw away the session" the fifth time teaches the wrong reflex
+    // — and the cost is not symmetric, because the queue takes seconds to load
+    // and the cursor position is lost with it.
+    //
+    // Esc on the bare list therefore says what the quit key is, rather than
+    // being a dead key. Silence would be the other failure: the user would not
+    // know whether the key did nothing or did something invisible.
+    if (key.escape && !input) {
+      setNotice('nothing to close — press q to quit')
+      return
+    }
+    if (input === 'q') {
       if (aiHandle.current) {
         // (wf31/9) THE `kind` FIELD REMOVED: the question now has only ONE reason (a running
         // review), so a distinguishing field would be dead information — it would
