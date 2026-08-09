@@ -83,7 +83,7 @@ const ANSWER_FINDINGS_INSTRUCTION = [
   // "I can't find a summary anywhere" — and they were right: the prompt
   // NEVER asked for one, so there was nothing TO display. The findings list
   // does not substitute for the verdict.
-  'The top-level `summary` is REQUIRED and HUMAN-READABLE: in 2-4 Hungarian sentences,',
+  'The top-level `summary` is REQUIRED and HUMAN-READABLE: in 2-4 English sentences,',
   'say WHAT you reviewed (files/focus), WHAT the main risk is, and WHAT the verdict is.',
   'This shows up both in the TUI panel and in the GitHub review body — don\'t repeat',
   'the findings list in it, summarize instead.',

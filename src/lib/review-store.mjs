@@ -157,7 +157,13 @@ function tmpBase() {
  * complaint.
  */
 function repoKey(repoRoot) {
-  const src = typeof repoRoot === 'string' && repoRoot !== '' ? repoRoot : '(nincs-repo-gyoker)'
+  // THE SENTINEL IS A HASH INPUT, NOT A MESSAGE: it feeds the digest that names
+  // the cache directory, so changing it changes the key for the "no repo root"
+  // case and orphans anything cached under the old one. That cost is acceptable
+  // here and only here — the tool has not shipped, the cache is local and
+  // regenerates on demand — and one Hungarian identifier left inside an
+  // otherwise English codebase would have outlived it by a long way.
+  const src = typeof repoRoot === 'string' && repoRoot !== '' ? repoRoot : '(no-repo-root)'
   return crypto.createHash('sha256').update(src).digest('hex').slice(0, REPO_KEY_LEN)
 }
 
