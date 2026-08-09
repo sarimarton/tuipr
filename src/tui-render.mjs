@@ -837,7 +837,19 @@ export function infoBody(info, innerWidth = 100, reviewLines = []) {
       // ISMERT, mérés nélkül. A sor tehát KIMONDJA, amit tudunk, és a `c`-t csak
       // arra ajánlja, amit NEM tudunk (kivel ütközöm, ütközöm-e a main-nel).
       : [
-          ...(fast.state === 'queue'
+          // A PROVIDER-FÜGGŐ SÁV: az integrációs branch rebuild-állapotáról szóló
+          // sorok CSAK akkor jelennek meg, ha a modellt olyan provider adta, ami
+          // ezt MÉRI (azt a `classification` jelenléte árulja el — a gh/git
+          // provider szándékosan nem tölti, lásd providers/github.mjs).
+          //
+          // MIÉRT NEM MARADHATNAK BENT MINDIG: enélkül a panel egy nem létező
+          // integrációs branch rebuild-jéről állítana valamit, a PR saját
+          // állapotából „következtetve" — vagyis a MÉRT és a KÖVETKEZTETETT
+          // tudás mosódna össze, ami pont az a hazug-státusz hibaosztály,
+          // amit ez a panel mindenhol máshol elkerül.
+          ...(fast.classification === null || fast.classification === undefined
+            ? []
+            : fast.state === 'queue'
             // BEÉPÜLT A NEXT-BE: a CI kumulatív rebase-e ÁTMENT. Ez ERŐSEBB tény,
             // mint a lokális páros próba (az merge-öt szimulál) — tehát itt a
             // mérés nem hozzáad, hanem bizonytalanabb választ adna ugyanarra.

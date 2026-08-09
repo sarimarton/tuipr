@@ -1,19 +1,18 @@
-// Az Ink (React) réteg a review-munkaállomáshoz.
+// The Ink (React) layer for the review workstation.
 //
-// Külön modulban a tiszta logikától (tui-core.mjs), hogy a
-// unit-tesztek telepített ink/react nélkül is futtathatók legyenek — a tesztek
-// csak a tiszta függvényeket importálják, ez a fájl pedig CSAK a TUI-indításkor
-// töltődik be.
+// Kept in a separate module from the pure logic (tui-core.mjs), so the
+// unit tests can run without an installed ink/react — the tests import
+// only the pure functions, and this file loads ONLY at TUI startup.
 //
-// FIGYELEM: ez a modul a CORE-ból importál, sosem a belépési pontból
-// (tui.mjs). A visszaimport körkörös ESM-ciklust csinálna, amitől az
-// entry top-level await-je deadlockol (exit 13, üres kimenet) — lásd a core
-// fejében a részletes leírást. A test/next-tui.test.ts statikus invariánsként
-// ellenőrzi, hogy ez az import ne csússzon vissza.
+// WARNING: this module imports from CORE, never from the entry point
+// (tui.mjs). A back-import would create a circular ESM cycle, which would
+// deadlock the entry's top-level await (exit 13, empty output) — see the
+// detailed writeup in the core's file head. test/next-tui.test.ts checks as a
+// static invariant that this import never slides back in.
 //
-// A React itt szándékosan `createElement`-tel íródik, nem JSX-szel: a repóban a
-// bin/*.mjs scriptek build-lépés nélkül, közvetlenül `node`-dal futnak (lásd
-// claude-sdk.mjs), és egy JSX-transzform bevezetése ezért nem járható.
+// React is deliberately written here with `createElement`, not JSX: the
+// bin/*.mjs scripts in this repo run directly with `node`, without a build
+// step (see claude-sdk.mjs), so introducing a JSX transform is not viable.
 
 import { spawnSync } from 'node:child_process'
 import process from 'node:process'
@@ -27,26 +26,27 @@ import {
   denialMessage,
   aiReviewBlockers,
   aiReviewBudgetState,
-  // A modell-választás (5b): env-kezdőérték, ciklikus váltó, látható sor.
+  // Model selection (5b): env starting value, cyclic switcher, visible row.
   aiReviewModelState,
   modelStep,
-  // A HÁTTÉR-REVIEW LÁTHATÓSÁGA (#904): a progressz-jelzés és a HÉT végállapot.
+  // BACKGROUND-REVIEW VISIBILITY (#904): the progress indicator and the SEVEN end states.
   AI_REVIEW_TIMEOUT_MS,
   aiReviewAgentAdditions,
   aiReviewOutcome,
   aiReviewPanelLines,
   aiReviewSummary,
-  // A HIBRID FINDINGS réteg (dupla könyvelés): válasz-parse, PR-ra kulcsolt
-  // findings-cache és a hunk-megnyitáskori batch-betöltés.
+  // The HYBRID FINDINGS layer (dual bookkeeping): answer parsing, PR-keyed
+  // findings cache, and the batch-load on hunk-open.
   answerFindingsNeedApply,
   applyAnswerFindings,
   cacheAiFindings,
   cacheMarkAiFindingsLoaded,
   cacheStoreAiFindings,
   hunkLiveSessionId,
-  // Az `r` ÉLETCIKLUS-KULCS + a DUPLA-`x` (a user 4. élő tesztje): az r
-  // állapotfüggő (indítás / fut / megnyitás), az x kétnyomásos megerősítést kap
-  // (abort futó review-n, elvetés kész review-n), a lábléc-címke állapotfüggő.
+  // The `r` LIFECYCLE KEY + the DOUBLE-`x` (the user's 4th live test): r
+  // is state-dependent (start / running / open), x gets a two-press
+  // confirmation (abort on a running review, discard on a finished one), the
+  // footer label is state-dependent.
   aiReviewLifecycle,
   cacheDiscardAiFindings,
   rKeyLabel,
@@ -55,14 +55,16 @@ import {
   budgetStep,
   budgetToggle,
   buildInfoModel,
-  // (wf31/56) A FADE tiszta számításai (layout.mjs): a színinterpoláció és az
-  // ütemező-lépés. A render-oldal csak KÉRI a színt, nem számol.
+  // (wf31/56) The FADE's pure computations (layout.mjs): the color
+  // interpolation and the scheduler step. The render side only REQUESTS the
+  // color, it doesn't compute.
   fadeProgress,
   queryTerminalColors,
   buildRows,
-  // (wf31/35) A FEJLÉC KEMÉNY VÁGÁSÁHOZ (cellában mér, emojit nem hasít félbe).
+  // (wf31/35) For the HARD CLIPPING OF THE HEADER (measures in cells, never
+  // cuts an emoji in half).
   clampCells,
-  // (wf31/45) A jobbra igazított pending CELLÁBAN mért hézagához.
+  // (wf31/45) For the cell-measured gap of the right-aligned pending label.
   displayWidth,
   cacheAnchor,
   modalChoiceStep,
@@ -94,8 +96,8 @@ import {
   fetchQueueAsync,
   fetchStalenessProbeAsync,
   fetchRepoRoot,
-  // (1a) A betöltött core rövid azonosítója a fejléchez — MEMOIZÁLT, tehát a
-  // renderből hívható (a spawn EGYSZER fut a session életében).
+  // (1a) The short identifier of the loaded core for the header — MEMOIZED, so
+  // it can be called from the render (the spawn runs ONCE per session lifetime).
   fetchCoreSha,
   hasReviewTrace,
   headerLine,
@@ -110,10 +112,10 @@ import {
   aiReviewGateByIds,
   startAgentReview,
   listLayout,
-  // (1b) A lépcsős stacked-jelölés behúzás-prefixe — KÖZÖS forrás a
-  // title-büdzsével (listLayout), hogy a mark-oszlop ne csúszhasson el.
-  // (1d) A review-eredmények DISZK-CACHE-E (/tmp). A memória-cache marad a
-  // render-úton; ez a réteg CSAK a kifizetett review-eredményt perzisztálja.
+  // (1b) The indent prefix for the staggered stacked marker — SHARED source
+  // with the title budget (listLayout), so the mark column can't drift.
+  // (1d) The DISK CACHE for review results (/tmp). The memory cache stays on
+  // the render path; this layer ONLY persists the review results already paid for.
   reviewStoreAnchor,
   reviewStoreDelete,
   reviewStoreEntryState,
@@ -145,10 +147,11 @@ import {
   NODE_PTY_UNAVAILABLE,
   reviewPathOptions,
   reviewTraceSources,
-  // (2) A REVIEW-CASCADE-MENÜ tiszta rétege — a MEGSZŰNT megerősítő modál
-  // helyén. A `reviewPathWarning` KIESETT: a menü tömör, egy soros
-  // figyelmeztetést kap (`reviewMenuWarning`), a bőbeszédű alak a régi dialóg
-  // tartalma volt. A KÜSZÖB (large) továbbra is az `aiReviewSummary`-ból jön.
+  // (2) The pure layer of the REVIEW CASCADE MENU — in place of the
+  // DISCONTINUED confirmation modal. `reviewPathWarning` was DROPPED: the menu
+  // gets a compact, one-line warning (`reviewMenuWarning`); the verbose form
+  // was the old dialog's content. The THRESHOLD (large) still comes from
+  // `aiReviewSummary`.
   reviewMenuAdvance,
   reviewMenuBack,
   reviewMenuLines,
@@ -163,23 +166,25 @@ import {
   uploadFindings,
 } from './tui-core.mjs'
 
-// A RENDER-RÉTEG (queue-sor + a három overlay-body). Külön modul, mert PROPBÓL
-// renderel és NULLA App-állapotot zár be — lásd a modul fejét.
+// The RENDER LAYER (queue row + the three overlay bodies). A separate module
+// because it renders FROM PROPS and closes over ZERO App state — see the
+// module's file head.
 //
-// A FÜGGŐSÉGI IRÁNY EGYIRÁNYÚ: az app a rendert importálja, a render CSAK a
-// core-t. Visszaimport (render → app) körkörös ESM-et adna, amit a
-// scripts/check-next-modules.mjs (3) fázisban kiterjesztett ciklus-detektora
-// gépileg tilt — ez a projekt MÉRT, néma hibaosztálya (exit 13, üres kimenet).
+// THE DEPENDENCY DIRECTION IS ONE-WAY: the app imports the render, the render
+// imports ONLY the core. A back-import (render → app) would create a
+// circular ESM, which the extended cycle detector in
+// scripts/check-next-modules.mjs phase (3) mechanically forbids — this
+// project's MEASURED, silent error class (exit 13, empty output).
 import {
-  // (wf31/55) A TOMPÍTOTT SZÖVEG SZÍNE — a render-modul EGYETLEN forrásából. A
-  // fejléc és a lista sorai UGYANAZT a fakó szintet kell mutassák nyitott panel
-  // alatt; két helyen külön beírt hex garantáltan elcsúszna.
+  // (wf31/55) The DIMMED TEXT COLOR — from the render module's SINGLE source.
+  // The header and the list rows must show the SAME faded level under an open
+  // panel; a hex written separately in two places would drift for sure.
   FADED_COLOR,
   Row,
-  // (wf31/39) A `Text` a RENDER-modulból jön, nem az `ink`-ből: az egy
-  // NEM-TÖRDELŐ wrapper (`wrap: 'truncate'`), ami a resize-kori wrap-flickert
-  // szünteti meg. Az indoklás a definíciójánál áll. Egy közvetlen `ink`-import
-  // itt NÉMÁN visszahozná a flickert azokon a sorokon.
+  // (wf31/39) `Text` comes from the RENDER module, not from `ink`: it's a
+  // NON-WRAPPING wrapper (`wrap: 'truncate'`) that eliminates the wrap-flicker
+  // on resize. The rationale sits at its definition. A direct `ink` import
+  // here would SILENTLY bring the flicker back on those lines.
   Text,
   approveModalProps,
   confirmBody,
@@ -190,44 +195,47 @@ import {
   renderLines,
 } from './tui-render.mjs'
 
-// A modell-név a body attribúciójába kerül. Env-ből felülírható, mert a TUI nem
-// tudja, melyik modell segített a findings előállításában.
+// The model name goes into the body attribution. Overridable via env, because
+// the TUI doesn't know which model helped produce the findings.
 //
-// FIGYELEM: ez a KÉZZEL DEKLARÁLT név, és csak a hunk-úton ('d' + 'f')
-// használjuk. Az AI-úton ('r') a modellt NEM deklaráljuk: a claude-burkoló
-// `modelUsage` kulcsából MÉRJÜK (parseAiReviewResult), mert ott a tényleges
-// modell tudható — egy elavult env-érték hazug attribúciót adna a PR-on.
+// WARNING: this is the MANUALLY DECLARED name, and we only use it on the hunk
+// path ('d' + 'f'). On the AI path ('r') we do NOT declare the model: we
+// MEASURE it from the claude-wrapper's `modelUsage` key (parseAiReviewResult),
+// because the actual model is knowable there — a stale env value would give a
+// false attribution on the PR.
 const MODEL = process.env.TUIPR_REVIEW_MODEL || 'claude-opus-5'
 
-// Az AI-review modellje (a claude `--model` aliasa) TÖBBÉ NEM modul-szintű
-// konstans: az env (`TUIPR_AI_REVIEW_MODEL`) csak KEZDŐÉRTÉKET ad a megerősítő
-// panel modell-választójának (aiReviewModelState, az askAiReview-ban olvasva),
-// és a TUI-váltás (`m`) futásonként felülírja. A MÉRT LELET, ami ezt hozta: a
-// `--model` nélküli hívás a user MENTETT defaultját örökölte (nála Fable 5),
-// és egyetlen review kimerítette a session-keretét.
+// The AI-review model (the alias for claude `--model`) is NO LONGER a
+// module-level constant: the env (`TUIPR_AI_REVIEW_MODEL`) only gives the
+// STARTING VALUE for the confirmation panel's model selector
+// (aiReviewModelState, read in askAiReview), and the TUI toggle (`m`)
+// overrides it per run. The MEASURED FINDING that led here: a call without
+// `--model` inherited the user's SAVED default (Fable 5 in their case), and a
+// single review exhausted the session budget.
 
 /**
- * AZ AKTÍV PROGRESSZ-TICKEREK SZÁMA — a timer-szivárgás MEGFIGYELHETŐ mértéke.
+ * THE NUMBER OF ACTIVE PROGRESS TICKERS — the OBSERVABLE measure of timer leaks.
  *
- * MIÉRT KELL (MÉRT HIÁNY, adverzariális mutáció MUT8'): a ticker cleanupját ki
- * lehetett iktatni úgy, hogy
- *   (a) a source-grep teszt ÁTMEGY (a `clearInterval(timer)` literál a fájlban
- *       marad, csak egy korábbi `return undefined` elé kerül), és
- *   (b) a `process.getActiveResourcesInfo()`-ra épülő viselkedés-teszt `✖`-et
- *       ad, DE A RUNNER UTÁNA BERAGAD — az összefoglaló sor sosem íródik ki,
- *       120 s után SIGKILL kell. CI-ben ez JOB-TIMEOUT, nem bukott teszt.
+ * WHY THIS IS NEEDED (MEASURED GAP, adversarial mutation MUT8'): the ticker's
+ * cleanup could be disabled such that
+ *   (a) the source-grep test PASSES (the `clearInterval(timer)` literal stays
+ *       in the file, just moved ahead of an earlier `return undefined`), and
+ *   (b) the behavior test built on `process.getActiveResourcesInfo()` gives
+ *       `✖`, BUT THE RUNNER THEN HANGS — the summary line never gets written,
+ *       needing SIGKILL after 120s. In CI this is a JOB TIMEOUT, not a failed test.
  *
- * A `getActiveResourcesInfo()` tehát nem elég ORACLE: globális, zajos (a runner
- * saját handle-jei is benne vannak), és a jelzése beragadásba fullad. EZ a
- * számláló KÖZVETLEN, LOKÁLIS és a beragadástól FÜGGETLEN — az `unref`-fel
- * együtt (lásd a ticker cleanupját) a szivárgás rendes assertion-bukássá válik.
+ * So `getActiveResourcesInfo()` isn't a good enough ORACLE: it's global, noisy
+ * (the runner's own handles are in there too), and its signal drowns in the
+ * hang. THIS counter is DIRECT, LOCAL, and INDEPENDENT of the hang — together
+ * with `unref` (see the ticker's cleanup) the leak turns into a normal,
+ * failing assertion.
  *
- * MODUL-SZINTŰ, NEM REF: a mérésnek a komponens LESZERELÉSE UTÁN kell
- * érvényesnek lennie, amikor a React-fa (és minden `ref`-je) már nem létezik.
+ * MODULE-LEVEL, NOT A REF: the measurement must stay valid AFTER the
+ * component UNMOUNTS, when the React tree (and every `ref` in it) no longer exists.
  */
 let tickerCount = 0
 
-/** Az aktív progressz-tickerek száma. Teszt-oracle; a produkció nem hívja. */
+/** The number of active progress tickers. Test oracle; production never calls it. */
 export function activeTickers() {
   return tickerCount
 }
@@ -1802,92 +1810,98 @@ export function App({
   // egy élő review állapotát — a #904-es "eltűnt a progressz" hibaosztály
   // visszacsempészése, csak most egy látszólag halott kódúton.
 
-  // --- A HÁTTÉR-REVIEW LÁTHATÓSÁGA (#904) ------------------------------------
+  // --- BACKGROUND REVIEW VISIBILITY (#904) ------------------------------------
   //
-  // A USER JELENTÉSE: "5 perc alatt se látok semmi feedbacket sehol, még a fenti
-  // üzenetet írja az app". A régi kód EGYSZER írt egy statikus status-sort, és
-  // onnantól SEMMI — se eltelt idő, se finding-szám, se tool-jelzés.
+  // THE USER'S REPORT: "for 5 minutes I don't see any feedback anywhere, the app
+  // still shows the message above". The old code wrote a static status line ONCE,
+  // and after that NOTHING — no elapsed time, no finding count, no tool signal.
   //
-  // A MÉRÉS-ÁLLAPOT `useRef`-BEN VAN, a LÁTHATÓ JELZÉS state-ben — ugyanaz a
-  // szétválasztás, mint a háttér-pollnál, és ugyanabból az okból: a ticknek
-  // MINDEN másodpercben olvasnia kell a friss értékeket, de rendert CSAK a
-  // LÁTHATÓ szöveg változása okozhat.
+  // THE MEASUREMENT STATE LIVES IN a `useRef`, the VISIBLE signal in state — the
+  // same split as for the background poll, and for the same reason: the tick
+  // must read the fresh values EVERY second, but a render should be caused ONLY
+  // by a change to the VISIBLE text.
   //
-  // MIÉRT REF ÉS NEM STATE a `startedAt`/`findings`/`tool` (a projekt tanult
-  // csapdája, MÁSODSZOR): "az Ink a suspend alatt ELDOBJA a renderelést". Az `r`
-  // úton a hunk TUI a terminált a saját teljes életére átveszi, tehát a suspend
-  // alatt írt state a closure-ökben NEM látszik — pontosan ez ragasztotta be a
-  // `busy`-t korábban. A ref-írás RENDER NÉLKÜL azonnal látszik.
+  // WHY REF AND NOT STATE for `startedAt`/`findings`/`tool` (the project's
+  // learned trap, SECOND TIME): "Ink DISCARDS rendering during suspend". On the
+  // `r` path the hunk TUI takes over the terminal for its entire lifetime, so
+  // state written during suspend inside closures is NOT visible — this is
+  // exactly what stuck `busy` earlier. A ref write is visible immediately,
+  // WITHOUT a render.
   const aiLive = React.useRef(null)
-  // (Az AI-review LÁTHATÓ állapota — `aiReview` state — a komponens tetején
-  // deklarált, mert a sor-spinner miatt a rows-useMemo is olvassa.)
-  // A KILÉPÉS-MEGERŐSÍTÉS futó review mellett (#904). A `claude -p` a hunk
-  // sessionbe ír, ezért detachelni NEM lehet — a kilépés MEGÖLI a review-t. Ha a
-  // kill elkerülhetetlen, akkor a KILÉPÉS PILLANATÁBAN kérdezünk, nem utólag
-  // közlünk (a user épp azt jelentette, hogy órákkal későbbi közlést kapott).
+  // (The AI-review VISIBLE state — `aiReview` state — is declared at the top of
+  // the component, because the rows-useMemo also reads it for the row spinner.)
+  // THE EXIT CONFIRMATION alongside a running review (#904). `claude -p` writes
+  // into the hunk session, so it CANNOT be detached — exiting KILLS the review.
+  // If the kill is unavoidable, we ask AT THE MOMENT OF EXIT, not report
+  // afterward (the user just reported getting a notice hours later).
   //
-  // MIÉRT NEM a `panel` MODÁL-módja: az PR-hoz KÖTÖTT (`panel.row`), a kilépés
-  // viszont GLOBÁLIS gesztus — és a panel modálja a listát is elrejti, ami itt
-  // felesleges kontextus-vesztés.
+  // WHY NOT the `panel`'s MODAL mode: that is BOUND to a PR (`panel.row`), while
+  // exit is a GLOBAL gesture — and the panel's modal also hides the list, which
+  // here is a needless loss of context.
   //
-  // (wf31/9) EGYETLEN OK, EZÉRT SIMA BOOL. A kilépés-kérdés CSAK a FUTÓ
-  // AI-review miatt jelenik meg: ott a kilépés megöl egy folyamatban lévő,
-  // tokent költő futást, tehát VALÓDI, visszafordíthatatlan veszteség a tét.
+  // (wf31/9) A SINGLE REASON, HENCE A PLAIN BOOL. The exit question appears ONLY
+  // because of a RUNNING AI review: there, exiting kills an in-progress,
+  // token-spending run, so the stake is a REAL, irreversible loss.
   //
-  // A KIVEZETETT MÁSODIK OK (`pending` — betöltetlen, kifizetett findingok) TÖRTÉNETE,
-  // mert tanulság: a guard a memória-only cache korából származott, ahol a
-  // kilépés tényleg eldobta a findingokat. A disk-cache (review-store) óta azok a
-  // `/tmp`-ben megmaradnak és az indulás visszaolvassa őket — a kérdés tehát már
-  // nem veszteséget előzött meg, hanem a CACHE MŰKÖDÉSÉRŐL tájékoztatott. A user
-  // döntése: "Ez a prompt NEM kell. A cache maradjon automatikus default, nem
-  // kell erről tájékoztatni a usert." A `kind` mező ezzel egyértékűvé, azaz holt
-  // információvá vált, ezért a state visszatért bool-nak; `null`/`false` = nincs
-  // nyitott kérdés.
+  // THE STORY OF THE REMOVED SECOND REASON (`pending` — not-yet-loaded, paid-for
+  // findings), kept as a lesson: the guard dated from the memory-only cache era,
+  // where exiting really did discard the findings. Since the disk cache
+  // (review-store), those persist in `/tmp` and startup reads them back in — so
+  // the question no longer prevented a loss, it merely INFORMED ABOUT HOW THE
+  // CACHE WORKS. The user's decision: "This prompt is NOT needed. The cache
+  // should stay an automatic default, no need to inform the user about it." The
+  // `kind` field thereby became single-valued, i.e. dead information, so the
+  // state went back to a bool; `null`/`false` = no open question.
   const [exitConfirm, setExitConfirm] = useState(null)
 
   /**
-   * A HÁTTÉR-REVIEW LEZÁRÁSA — MINDEN kilépési úton ezen keresztül.
+   * SHUTTING DOWN THE BACKGROUND REVIEW — every exit path goes through this.
    *
-   * MIÉRT KILL ÉS NEM DETACH (a döntés indoklása): a `claude -p` a hunk sessionbe
-   * ÍR. Egy detachelt review a TUI kilépése UTÁN is írna egy sessionbe, amit már
-   * senki nem néz át — a findingok a következő TUI-indításnál egy MÁS PR
-   * kontextusában bukkannának fel, és a `f` feltöltés a MI attribúciónkkal
-   * küldené fel őket. Ez pontosan a hazug provenance, amit a feature máshol
-   * mindenhol kerül (lásd az attribúció PR-egyezés-ellenőrzését). A zombie pedig
-   * külön tilos: a projekt ezt már egyszer megfizette a merge-tree mérőnél.
+   * WHY KILL AND NOT DETACH (the reasoning behind the decision): `claude -p`
+   * WRITES into the hunk session. A detached review would keep writing into a
+   * session after the TUI exits that nobody reviews anymore — the findings
+   * would surface at the next TUI start IN THE CONTEXT OF A DIFFERENT PR, and
+   * the `f` upload would submit them under OUR attribution. This is exactly the
+   * lying provenance the feature avoids everywhere else (see the attribution's
+   * PR-match check). The zombie is separately forbidden too: the project already
+   * paid for that once with the merge-tree metric.
    *
-   * A `reason` A #904-ES JAVÍTÁS: a régi, ok nélküli abort MINDEN kilépési utat
-   * (kilépés / `x` / unmount) ugyanarra a hazug "megszakítva" szövegre vitt. Most
-   * az ok ÁTMEGY a core-ig, és a hívó SAJÁT végállapotot mond rá.
+   * `reason` IS THE #904 FIX: the old, reasonless abort routed EVERY exit path
+   * (exit / `x` / unmount) to the same lying "aborted" text. Now the reason
+   * PROPAGATES down to the core, and the caller states its OWN final state.
    */
   const stopAiReview = useCallback((reason = 'exit') => {
     aiHandle.current?.abort(reason)
     aiHandle.current = null
   }, [])
 
-  // MINDEN blokkoló akció EZEN megy át. A `finally` KETTŐT állít vissza (a
-  // lockot ÉS a busy-t), tehát a beragadás egyetlen ágon sem lehetséges — a
-  // korábbi hiba épp az volt, hogy ez a pár két helyen (és két úton) élt.
+  // EVERY blocking action goes THROUGH this. The `finally` resets TWO things
+  // (the lock AND busy), so getting stuck is impossible on any branch — the
+  // earlier bug was precisely that this pair lived in two places (and two
+  // paths).
   //
-  // A `release` A PÁRHUZAMOS MODELL FOGANTYÚJA: a hívó KORÁN elengedheti a UI-t,
-  // miközben a saját munkája (a háttér-review) tovább fut. Enélkül a "háttérben
-  // fut" ígéret hazugság lenne: a `busy` a claude teljes idejére bent maradna, a
-  // user nem navigálhatna és nem zárhatná a panelt — pontosan az a beragadt
-  // állapot, amit ez a csomag megszüntet, csak most szándékosan.
+  // `release` IS THE HANDLE FOR THE PARALLEL MODEL: the caller can release the
+  // UI EARLY while its own work (the background review) keeps running. Without
+  // this, the "runs in the background" promise would be a lie: `busy` would
+  // stay set for claude's entire duration, the user could not navigate or close
+  // the panel — exactly the stuck state this package eliminates, just now on
+  // purpose.
   //
-  // A LOCK A `release` UTÁN IS SZABAD: egy második `r` ilyenkor elindulhat. Ez
-  // SZÁNDÉKOS — a hunk-session repo-szintű, tehát két párhuzamos review ugyanabba
-  // a sessionbe írna, és a halmaz-diffes gate ezt (helyesen) nem tudná
-  // szétválasztani. Ezért a `doAiReview` a SAJÁT handle-jével véd: amíg
-  // `aiHandle.current` nem null, új review nem indul (lásd az ott lévő guardot).
+  // THE LOCK IS FREE AGAIN AFTER `release`: a second `r` can start at that
+  // point. This is INTENTIONAL — the hunk session is repo-scoped, so two
+  // parallel reviews would write into the same session, and the set-diff gate
+  // could not (correctly) separate them. That's why `doAiReview` guards with
+  // ITS OWN handle: while `aiHandle.current` is not null, no new review starts
+  // (see the guard there).
   /**
-   * @param {Function} fn az akció teste
-   * @param {string} [key] (wf31/23) A FUTÓ AKCIÓ KULCSA (`'a'`, `'m'`, `'f'`) — a
-   *   LEGENDÁBAN jelöljük meg (`a: approve (fut…)`), nem globális status-sorban.
-   *   MIÉRT PARAMÉTER, ÉS NEM AZ AKCIÓ ÍRJA MAGA: így a jelzés BEÁLLÍTÁSA és a
-   *   TÖRLÉSE ugyanabban a `try/finally`-ban él, mint a `busy` — egy akció-oldali
-   *   setter a hiba-utakon (dobás, korai return) BERAGADNA, és a legend örökre a
-   *   „(fut…)" jelzést mutatná.
+   * @param {Function} fn the body of the action
+   * @param {string} [key] (wf31/23) THE KEY OF THE RUNNING ACTION (`'a'`, `'m'`,
+   *   `'f'`) — we mark it in the LEGEND (`a: approve (running…)`), not in a
+   *   global status line. WHY A PARAMETER, AND NOT SET BY THE ACTION ITSELF:
+   *   this way the signal's SETTING and CLEARING live in the same
+   *   `try/finally` as `busy` — a setter on the action's side would get STUCK
+   *   on error paths (throw, early return), and the legend would show the
+   *   "(running…)" signal forever.
    */
   const runExclusive = useCallback(async (fn, key, prNumber = null) => {
     if (actionLock.current) return false
@@ -2689,17 +2703,17 @@ export function App({
       }
 
       if (answerError) {
-        // Van blokk, de sérült — ÉS a hunk-út sem adott semmit: a review nem
-        // verifikálható. HANGOS, de a PANELBEN (a 3. pont szerint).
+        // There is a block, but it's damaged — AND the hunk path also gave nothing:
+        // the review is not verifiable. LOUD, but IN THE PANEL (per point 3).
         setAiReview({
           pr: row.number,
           status: 'failed',
-          message: `#${row.number}: a review válasz-findingjai nem parse-olhatók (${answerError}), `
-            + 'és a hunk sessionbe sem került finding — a review nem verifikálható.',
+          message: `#${row.number}: the review's answer findings could not be parsed (${answerError}), `
+            + 'and no finding reached the hunk session either — the review is not verifiable.',
         })
         return
       }
-      // SE HUNK-FINDING, SE VÁLASZ-FINDING: becsületes "lefutott, de 0" jelzés.
+      // NEITHER HUNK-FINDING NOR ANSWER-FINDING: an honest "ran, but 0" signal.
       setAiReview({
         pr: row.number,
         status: 'no-findings',

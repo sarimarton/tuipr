@@ -539,6 +539,11 @@ export function buildInfoModel({ row, progress = null }) {
     // A landolás-blokkolók ugyanabból a tiszta függvényből jönnek, amit a merge
     // megerősítő ekrány használ — egy szabály, két megjelenítés.
     landableBlockers: canMergeRow(row) ? [] : mergeBlockers(row),
+    // A PROVIDER JELZÉSE, ÁTVEZETVE: a `classification` csak a MÉRŐ providerben
+    // létezik (a gh/git provider szándékosan nem tölti). A nézet ezen dönti el,
+    // hogy megjelenítheti-e az integrációs branch rebuild-állapotát — enélkül
+    // a MÉRT és a KÖVETKEZTETETT tudás mosódna össze.
+    classification: row.classification ?? null,
   }
   const measurable = !stacked
   let slow = { state: 'idle', diag: null, advice: null, label: '', error: null }
