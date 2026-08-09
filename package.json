@@ -32,12 +32,20 @@
     "LICENSE"
   ],
   "dependencies": {
-    "hunkdiff": "0.18.0",
     "ink": "^7.1.1",
     "react": "^19.2.8"
   },
-  "optionalDependencies": {
+  "peerDependencies": {
+    "hunkdiff": ">=0.17",
     "node-pty": "^1.1.0"
+  },
+  "peerDependenciesMeta": {
+    "hunkdiff": {
+      "optional": true
+    },
+    "node-pty": {
+      "optional": true
+    }
   },
   "scripts": {
     "test": "node --test 'test/**/*.test.mjs'",

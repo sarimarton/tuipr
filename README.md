@@ -53,7 +53,23 @@ negative from an absent one, so the producer must not blur them.
 - Node 20 or newer
 - [`gh`](https://cli.github.com), authenticated (`gh auth login`)
 - `git`
-- [`hunk`](https://github.com/modem-dev/hunk) for diff review — `brew install hunk`
+
+Diff review needs [`hunk`](https://github.com/modem-dev/hunk), installed
+separately:
+
+```
+brew install hunk
+```
+
+It is **not** bundled, and that is a measured decision rather than an
+oversight. Depending on it directly pulls in its own runtime and per-platform
+binaries: the install went from 23 MB to 367 MB. A single command to install a
+single binary is the better trade, and tuipr finds `hunk` on `PATH`. Everything
+except diff review works without it.
+
+The same applies to `node-pty`, which is optional. Installing it (62 MB) buys
+one thing: returning from the diff viewer without a brief flicker. Without it,
+the terminal handoff uses `script(1)` instead.
 
 ## Architecture
 
