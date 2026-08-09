@@ -40,8 +40,8 @@
     "node-pty": "^1.1.0"
   },
   "scripts": {
-    "test": "node --test test/",
-    "check": "node --check bin/tuipr.mjs && node --test test/"
+    "test": "node --test 'test/**/*.test.mjs'",
+    "check": "node --check bin/tuipr.mjs && node --test 'test/**/*.test.mjs'"
   },
   "engines": {
     "node": ">=20"

@@ -378,11 +378,11 @@ const PENDING_LABELS = {
 }
 
 /**
- * A pending-címke a futó akció kulcsához, vagy `null`.
+ * The pending label for the running action's key, or `null`.
  *
- * FAIL-SOFT AZ ISMERETLEN KULCSRA: `null`, tehát a legend változatlan. Egy
- * kitalált címke (pl. a kulcs kiírása) rosszabb lenne, mint a jelzés hiánya — a
- * `busy` alatt a UI amúgy is blokkolt.
+ * FAIL-SOFT ON AN UNKNOWN KEY: `null`, so the legend stays unchanged. A
+ * made-up label (e.g. printing the key) would be worse than no indicator at
+ * all — the UI is blocked under `busy` anyway.
  */
 export function pendingLabelFor(key) {
   if (typeof key !== 'string' || key === '') return null
@@ -390,29 +390,31 @@ export function pendingLabelFor(key) {
 }
 
 /**
- * A legend + a jobbra igazított pending EGY sorba, CELLÁBAN mérve.
+ * The legend + the right-aligned pending in ONE line, measured in CELLS.
  *
- * A visszatérés `{ left, gap, right }`: a render HÁROM Textre vágja, mert a
- * `right` INVERZ kiemelést kap (`inverse`), a `left` pedig dim marad. Egy
- * összefűzött string ezt nem tudná — az attribútum Text-enként él.
+ * The return is `{ left, gap, right }`: the render splits it into THREE
+ * Texts, because `right` gets an INVERSE highlight (`inverse`) while `left`
+ * stays dim. A concatenated string couldn't do this — the attribute lives
+ * per-Text.
  *
- * MIÉRT `inverse`, ÉS NEM FIX HEX-SZÍNEK: az ANSI `inverse` (`\e[7m`) a terminál
- * SAJÁT elő- és háttérszínét cseréli fel, tehát a téma DÖNTI EL az eredményt —
- * sötét témán világos háttér + sötét betű (amit a user kért), világos témán a
- * fordítottja. Egy fix `backgroundColor: '#d8dee9'` a user gépén pontos lenne, de
- * világos témán BELEOLVADNA a háttérbe, és a jelzés eltűnne.
+ * WHY `inverse`, AND NOT FIXED HEX COLORS: ANSI `inverse` (`\e[7m`) swaps the
+ * terminal's OWN foreground and background colors, so the THEME DECIDES the
+ * result — light background + dark char on a dark theme (what the user
+ * asked for), the reverse on a light theme. A fixed `backgroundColor:
+ * '#d8dee9'` would be exact on the user's machine, but on a light theme it
+ * would BLEND INTO the background and the indicator would vanish.
  *
- * A DEGRADÁCIÓ a `headerLine` mintája: ha a kettő nem fér el, a PENDING esik ki, a
- * legend marad. Ok: a legend a VEZÉRLÉST hirdeti (enélkül a UI használhatatlan), a
- * pending EFEMER — és a `busy` állapotot a user amúgy is érzékeli abból, hogy a
- * gombok nem élnek.
+ * THE DEGRADATION follows the `headerLine` pattern: if the two don't fit, the
+ * PENDING drops, the legend stays. Reason: the legend advertises CONTROLS
+ * (without it the UI is unusable), the pending is EPHEMERAL — and the user
+ * senses the `busy` state anyway from the buttons not responding.
  */
 export function legendWithPending(keys, key, columns = 0) {
   const label = pendingLabelFor(key)
   if (label === null) return { left: keys, gap: '', right: '' }
   const limit = Math.max(0, Math.floor(Number(columns) || 0))
-  // A `GAP` a minimális hézag: enélkül szűk terminálon a legend utolsó szegmense
-  // és a pending ÖSSZEÉRNE (`q: kilépés⏳ approve…`).
+  // `GAP` is the minimum spacing: without it, on a narrow terminal the
+  // legend's last segment and the pending would RUN TOGETHER (`q: quit⏳ approve…`).
   const GAP = 4
   const need = displayWidth(keys) + GAP + displayWidth(label)
   if (limit <= 0 || need > limit) return { left: keys, gap: '', right: '' }
@@ -1070,24 +1072,26 @@ export function App({
   }, [])
 
   /**
-   * A MEGERŐSÍTŐ MODÁL megnyitása — EGYETLEN úton, minden akcióhoz.
+   * OPENING THE CONFIRMATION MODAL — via a SINGLE path, for every action.
    *
-   * MIÉRT EGY HELYEN: a régi kódban NÉGY `setConfirm({...})` hívás állt szét
-   * (approve / merge / upload / ai-review), és mindegyik maga vette fel az
-   * `armedAt`-ot ÉS maga döntötte el, mit tesz a nyitott info-panellel. A
-   * dwell-kapu (confirmAccepts) így négy helyen élt-halt, és egy elfelejtett
-   * `armedAt` NÉMÁN kikapcsolta volna a typeahead-védelmet azon az egy ágon.
+   * WHY IN ONE PLACE: in the old code FOUR separate `setConfirm({...})` calls
+   * existed (approve / merge / upload / ai-review), and each one set
+   * `armedAt` itself AND decided for itself what to do with an open info
+   * panel. The dwell gate (confirmAccepts) thus lived and died in four
+   * places, and one forgotten `armedAt` would have SILENTLY disabled the
+   * typeahead protection on that one branch.
    *
-   * A `panelToModal` MEGTARTJA a `row`-t ÉS a `progress`-t: ha a modál egy nyitott
-   * INFO-panelről nyílik, az Esc VISSZALÉP a panelre, és a mért diagnózis nem
-   * veszik el. Ha nem volt panel (a listáról nyílt), a `panelOpen` most nyit egyet
-   * — így az Esc ott is a PANELRE visz, tehát a "megnézem → cselekszem →
-   * visszanézem" kör EGY helyen zárul, ahogy a user kérte.
+   * `panelToModal` KEEPS `row` AND `progress`: if the modal opens from an
+   * already-open INFO panel, Esc STEPS BACK to the panel, and the measured
+   * diagnosis isn't lost. If there was no panel (opened from the list),
+   * `panelOpen` now opens one — so Esc goes to the PANEL there too, meaning
+   * the "look → act → look again" loop closes in ONE place, as the user
+   * requested.
    *
-   * A VÁLASZTÁS-INDEX NULLÁZÓDIK: minden új döntés a NEM-en (fail-closed) indul.
-   * Enélkül egy előző modálban "Igen"-re állított kurzor átvándorolna a
-   * következőre — pontosan az a fajta ragadós állapot, ami egy visszavonhatatlan
-   * akciónál megengedhetetlen.
+   * THE CHOICE INDEX RESETS: every new decision starts at NO (fail-closed).
+   * Without this, a cursor left on "Yes" from a previous modal would carry
+   * over to the next one — exactly the kind of sticky state that's
+   * unacceptable for an irreversible action.
    */
   const openModal = useCallback((row, modalProps) => {
     setChoiceIndex(0)
@@ -1095,54 +1099,58 @@ export function App({
   }, [])
 
   /**
-   * A NYITOTT MODÁL részleges frissítése (budget-váltás, review-út-léptetés).
+   * Partial update of an open MODAL (budget switch, review-path stepping).
    *
-   * Az `armedAt`-hoz SZÁNDÉKOSAN NEM nyúlunk: ezek a gesztusok se megerősítést, se
-   * megszakítást nem jelentenek, tehát a dwell-kapu nem indulhat újra. Ha
-   * armolnának, a plafon/út nyomkodásával a 250 ms-os védelem VÉGTELENÜL
-   * újraindítható lenne — a typeahead-kapu kikerülhetővé válna pont azon az úton,
-   * ami a leginkább token-költő (AI-review).
+   * `armedAt` is DELIBERATELY left untouched: these gestures mean neither
+   * confirmation nor abort, so the dwell gate must not restart. If they did
+   * arm it, the 250 ms protection could be restarted INDEFINITELY by mashing
+   * the ceiling/path control — the typeahead gate would become bypassable on
+   * exactly the path that spends the most tokens (AI review).
    */
   const patchModal = useCallback((patch) => {
     setPanel((cur) => (cur?.mode === 'modal' ? { ...cur, modal: { ...cur.modal, ...patch } } : cur))
   }, [])
 
   /**
-   * A queue újratöltése. A `hard` út (az `R` billentyű) a cache-t IS
-   * invalidálja; a puha út (egy akció utáni reload) NEM — az akció (approve /
-   * merge / findings-feltöltés) nem mozdítja el a merge-tree próbák eredményét,
-   * és egy néma cache-dobás minden approve után újramérést kényszerítene, azaz
-   * pontosan azt a lassulást hozná vissza, amiért a cache készült.
+   * Reloading the queue. The `hard` path (the `R` key) ALSO invalidates the
+   * cache; the soft path (a reload after an action) does NOT — an action
+   * (approve / merge / findings upload) doesn't move the merge-tree probes'
+   * results, and a silent cache drop would force a re-measurement after every
+   * approve, i.e. bring back exactly the slowdown the cache was built to avoid.
    *
-   * A MAIN-SHA MINDEN BETÖLTÉSSEL frissül: ha a main elmozdult, a horgony
-   * elmozdul, tehát a MEGLÉVŐ bejegyzések ELAVULTTÁ válnak — törlés nélkül, mert
-   * a listán jelezni kell, hogy VAN mért eredmény, csak már nem érvényes.
+   * THE MAIN SHA IS REFRESHED ON EVERY LOAD: if main has moved, the anchor
+   * moves, so the EXISTING entries become STALE — without deletion, because
+   * the list needs to signal that a measured result EXISTS, it's just no
+   * longer valid.
    */
   const reload = useCallback(({ hard = false } = {}) => {
     try {
       const fresh = fetchQueue()
-      // A SORREND load-bearing: a cache-invalidálás a modell beállítása ELŐTT
-      // fut, különben egy render még a régi (immár érvénytelen) bejegyzéseket
-      // "friss"-nek látná az új horgonnyal.
+      // THE ORDER is load-bearing: cache invalidation runs BEFORE setting the
+      // model, otherwise one render would still see the old (now invalid)
+      // entries as "fresh" against the new anchor.
       if (hard) cacheInvalidateAll(cache.current)
       const sha = fetchMainSha()
       setMainSha(sha)
-      // A REBUILD-ÁLLAPOT ugyanazon a betöltés-úton mérve, mint a main-SHA. A
-      // `fetchRebuildStatus` FAIL-SOFT (`null` mindenre, ami nem mérhető), tehát
-      // nincs try/catch: egy rebuild-státusz nem buktathatja a queue betöltését.
+      // THE REBUILD STATE is measured on the same load path as the main SHA.
+      // `fetchRebuildStatus` is FAIL-SOFT (`null` for anything unmeasurable),
+      // so no try/catch: a rebuild status can't fail the queue load.
       setRebuild(fetchRebuildStatus())
       setModel(fresh)
       setLoadedAt(new Date())
       bumpCache()
-      // (wf31/25) AZ OPTIMISTA JELÖLÉSEK TAKARÍTÁSA — amit a friss modell MÁR
-      // tükröz, az itt kiesik. Enélkül a jelölés BERAGADNA: egy `approved`
-      // optimista bejegyzés örökre felülírná az rmark-ot, akkor is, ha a review-t
-      // közben visszavonták.
+      // (wf31/25) CLEANING UP THE OPTIMISTIC MARKS — whatever the fresh model
+      // ALREADY reflects drops out here. Without this, a mark would GET STUCK:
+      // an `approved` optimistic entry would forever override the rmark, even
+      // if the review had meanwhile been revoked.
       //
-      // A KÉT ÁLLAPOT MÁSKÉNT ÉR CÉLT, ezért két külön feltétel:
-      //   · `merged` — a PR ELTŰNT a nyitott listából (ez a cél; a modell utolérte);
-      //   · `approved` — a `reviewDecision` MEGJÖTT `APPROVED`-ként.
-      // Ami MÉG NEM teljesült, az MARAD — a következő reload újra megvizsgálja.
+      // THE TWO STATES REACH THEIR GOAL DIFFERENTLY, hence two separate
+      // conditions:
+      //   · `merged` — the PR has DISAPPEARED from the open list (this is the
+      //     goal; the model has caught up);
+      //   · `approved` — `reviewDecision` has ARRIVED as `APPROVED`.
+      // Whatever has NOT yet been fulfilled STAYS — the next reload examines
+      // it again.
       setOptimistic((cur) => {
         const keys = Object.keys(cur)
         if (keys.length === 0) return cur
@@ -1151,60 +1159,65 @@ export function App({
         for (const k of keys) {
           const row = byNumber.get(Number(k))
           if (cur[k] === 'merged') {
-            // A sor MÉG ott van → a jelölés kell. Ha eltűnt, a jelölésnek sincs
-            // már mit felülírnia.
+            // The row is STILL there → the mark is needed. If it's gone, the
+            // mark has nothing left to override.
             if (row !== undefined) next[k] = 'merged'
           } else if (cur[k] === 'approved') {
-            // A modell MÉG nem tud az approve-ról → tartjuk. Ha már tud (vagy a
-            // sor eltűnt), elengedjük.
+            // The model doesn't know about the approve YET → keep it. If it
+            // already does (or the row is gone), let it go.
             if (row !== undefined && row.reviewDecision !== 'APPROVED') next[k] = 'approved'
           }
         }
-        // AZONOS TARTALOMRA UGYANAZ A REFERENCIA: a `buildRows` memo-ja az
-        // `optimistic`-ra is figyel, és egy új (de egyező) objektum minden
-        // reloadnál újraszámolná a teljes sor-listát.
+        // SAME REFERENCE FOR IDENTICAL CONTENT: `buildRows`'s memo also watches
+        // `optimistic`, and a new (but equal) object would recompute the whole
+        // row list on every reload.
         return keys.length === Object.keys(next).length ? cur : next
       })
-      // A POLL BÁZISA ÚJRAINDUL: a korábbi elavultság-jelzés MEGSZŰNIK — a user
-      // épp azt tette meg, amit a jelzés kért. Egy megmaradó jelzés a frissítés
-      // után azt tanítaná, hogy a jelzés hazudik, és a user leszokna róla.
+      // THE POLL'S BASELINE RESTARTS: any earlier staleness indicator GOES
+      // AWAY — the user just did what the indicator asked for. A leftover
+      // indicator after a refresh would teach the user that the indicator
+      // lies, and they'd stop trusting it.
       //
-      // A BÁZIS A PRÓBÁVAL AZONOS ÚTON készül (`fetchStalenessProbe`), NEM a
-      // frissen betöltött `queue --json` modellből.
+      // THE BASELINE IS BUILT ON THE SAME PATH AS THE PROBE
+      // (`fetchStalenessProbe`), NOT from the freshly loaded `queue --json`
+      // model.
       //
-      // MIÉRT — MÉRT BUG, ÉLŐ RENDERBŐL: az első változat a bázist a queue
-      // modelljéből számolta ("ingyen van, a mezők már megvannak"). Csakhogy a
-      // KÉT FORRÁS KÜLÖNBÖZHET: a `queue --json` a maga szűrésével és
-      // időpontjában olvas, a poll a saját `gh pr list`-jével a magáéban. Ha a
-      // kettő aláírása eltér (mert időközben tényleg változott valami, vagy mert
-      // a két lekérés más pillanatot lát), akkor az `R` utáni ELSŐ tick AZONNAL
-      // "elmozdulást" észlelt — a jelzés visszajött, és SOHA nem lehetett
-      // eltüntetni. Élő renderben ez pontosan így viselkedett: `R` után a
-      // fejlécben ott maradt az "⟳ elavult", vagyis egy hazug, örökké villogó
-      // figyelmeztetés — az a hibaosztály, amit ez a feature megszüntetni akart.
+      // WHY — A MEASURED BUG, FROM A LIVE RENDER: the first version computed
+      // the baseline from the queue model ("it's free, the fields already
+      // exist"). But the TWO SOURCES CAN DIFFER: `queue --json` reads with its
+      // own filtering and at its own moment, the poll reads with its own `gh
+      // pr list` at its own moment. If the two signatures differ (because
+      // something genuinely changed meanwhile, or because the two fetches see
+      // different moments), then the FIRST tick after `R` IMMEDIATELY detected
+      // "drift" — the indicator came right back, and it could NEVER be made to
+      // go away. In a live render this behaved exactly like that: after `R`,
+      // the header kept showing "⟳ stale", i.e. a lying, forever-blinking
+      // warning — the exact failure class this feature was meant to eliminate.
       //
-      // A KÖLTSÉG (mért ~550 ms) TUDATOSAN VÁLLALT, és nem a UI útjában van: a
-      // `queue --json` maga ~1.8 s, tehát a bázis-próba a betöltés ~30%-a, és
-      // KIZÁRÓLAG a betöltéskor fut (nem renderenként). Az alternatíva — két
-      // különböző forrásból vett aláírás összehasonlítása — nem
-      // teljesítmény-kérdés, hanem HELYESSÉGI: eltérő forrásokat nem lehet
-      // egymáshoz mérni.
+      // THE COST (measured ~550 ms) IS DELIBERATELY ACCEPTED, and it's not in
+      // the UI's way: `queue --json` itself is ~1.8 s, so the baseline probe
+      // is ~30% of the load, and it runs ONLY at load time (not per render).
+      // The alternative — comparing signatures taken from two different
+      // sources — isn't a performance question, it's a CORRECTNESS one:
+      // different sources can't be measured against each other.
       const base = fetchStalenessProbe()
       poll.current = pollInit({
         now: now(),
-        // A próba HIBÁJA esetén `null` a bázis: a `stalenessChanged`
-        // fail-closed a hamis pozitív ellen (nincs mihez mérni → nincs
-        // "elavult"), a következő SIKERES próba pedig felveszi a bázist. Így egy
-        // pillanatnyi hálózati hiba a betöltéskor NEM okoz hamis jelzést.
+        // On a FAILED probe the baseline is `null`: `stalenessChanged` is
+        // fail-closed against false positives (nothing to measure against →
+        // no "stale"), and the next SUCCESSFUL probe picks up the baseline.
+        // So a momentary network error at load time does NOT cause a false
+        // indicator.
         signature: base.ok ? base.signature : null,
       })
       setPollLabel('')
-      setNotice(`${fresh.length} PR a queue-ban${hard ? ' (refresh: a cache invalidálva)' : ''}`)
+      setNotice(`${fresh.length} PRs in the queue${hard ? ' (refresh: cache invalidated)' : ''}`)
     } catch (error) {
-      // A queue-betöltés hibája NEM sor-specifikus (nincs mit kiválasztani), de
-      // overlay-t akkor is kap: enélkül a TUI üres listát mutatna magyarázat
-      // nélkül, ami "nincs PR"-nak olvasható — hazug csend egy fail helyén.
-      showError(null, `a queue nem tölthető be: ${error.message}`)
+      // A queue-load error is NOT row-specific (nothing to select), but it
+      // still gets an overlay: without it the TUI would show an empty list
+      // with no explanation, which reads as "no PRs" — a lying silence where
+      // a fail belongs.
+      showError(null, `queue failed to load: ${error.message}`)
     }
   }, [bumpCache, showError, now])
 
@@ -3388,70 +3401,75 @@ export function App({
   // zombie.
   useEffect(() => stopAiReview, [stopAiReview])
 
-  // --- A HÁTTÉR-POLL TICKJE -------------------------------------------------
+  // --- THE BACKGROUND POLL'S TICK --------------------------------------------
   //
-  // A KAPUKAT a TICK olvassa ki friss `ref`-ekből, NEM a hook dependency-jéből.
+  // The TICK reads the GATES from fresh `ref`s, NOT from the hook's dependency
+  // list.
   //
-  // MIÉRT (ez a lényegi tervezési döntés): ha az `overlayOpen`/`measuring`
-  // állapotok a `useEffect` dependency-listáján lennének, akkor MINDEN
-  // panel-nyitás és -zárás LEÁLLÍTANÁ és ÚJRAINDÍTANÁ az intervallumot — az
-  // esedékesség számlálója nullázódna, és egy aktívan panelező user gépén a
-  // poll SOSEM futna le. A kapuk ezért a tick BELSEJÉBEN olvasódnak, az
-  // intervallum pedig a komponens életében EGYSZER jön létre.
+  // WHY (this is the substantive design decision): if the `overlayOpen`/
+  // `measuring` states were on the `useEffect` dependency list, EVERY panel
+  // open and close would STOP and RESTART the interval — the due-time counter
+  // would reset, and on an actively-paneling user's machine the poll would
+  // NEVER run. So the gates are read INSIDE the tick, while the interval
+  // itself is created ONCE in the component's lifetime.
   const gateRef = React.useRef({ overlayOpen: false, measuring: false })
   gateRef.current = {
-    // A `busy` is overlay-nek számít: az akció fut, a UI blokkolt. A PANEL
-    // MINDKÉT módja (inline info ÉS modál megerősítés) kapunak számít: a
-    // poll-fejezet (a) kapujának indoka szerint nyitott dialógusnál a fókusz a
-    // döntésen/olvasáson van, a poll nem szólhat közbe.
+    // `busy` also counts as an overlay: an action is running, the UI is
+    // blocked. BOTH panel modes (inline info AND modal confirmation) count as
+    // gates: per the poll section's (a) gate rationale, when a dialog is open
+    // the focus is on the decision/reading, and the poll must not interrupt.
     overlayOpen: errorState !== null || panel !== null || busy,
-    // A MÉRÉS akkor "fut", ha a panel progress-állapota running. A
-    // `diagHandle` nem elég: a child kill-je aszinkron, tehát a handle még ott
-    // lehet egy már befejezett mérésnél.
+    // The MEASUREMENT is "running" when the panel's progress state is
+    // running. `diagHandle` isn't enough: the child's kill is asynchronous, so
+    // the handle can still be there for an already-finished measurement.
     measuring: panel?.progress?.running === true,
   }
 
   useEffect(() => {
     const tickMs = pollIntervalMs ?? POLL_INTERVAL_MS
     const timer = setInterval(() => {
-      // KÉT PRÓBA SOSEM FUT EGYSZERRE: a fetchStalenessProbe spawnSync-es
-      // (blokkoló), és egy átfedő indítás a UI-t kétszer annyit fagyasztaná.
+      // TWO PROBES NEVER RUN AT ONCE: `fetchStalenessProbe` is spawnSync-based
+      // (blocking), and an overlapping launch would freeze the UI twice as
+      // long.
       if (probing.current) return
       const t = now()
       const gates = gateRef.current
       if (!pollDue(poll.current, { ...gates, now: t })) return
       probing.current = true
       try {
-        // A PRÓBA. SOSEM DOB (strukturált `{ ok, error }`-t ad) — a poll
-        // háttérfolyamat, egy dobás itt unhandled rejectionként végezné, és a
-        // TUI-t vinné magával.
+        // THE PROBE. NEVER THROWS (gives a structured `{ ok, error }`) — the
+        // poll is a background process, a throw here would end up as an
+        // unhandled rejection and take the TUI down with it.
         const res = fetchStalenessProbe()
         if (!res.ok) {
-          // CSENDES ÚJRAPRÓBÁLÁS (backoff). A nyers hibaszöveg az állapotba
-          // kerül (diagnosztikára), a UI-ba NEM — se overlay, se status-sor:
-          // egy háttér-művelet hibája nem kérhet nyugtázást a usertől.
+          // SILENT RETRY (backoff). The raw error text goes into the state
+          // (for diagnostics), NOT into the UI — neither an overlay nor a
+          // status line: a background operation's error can't ask the user
+          // for an acknowledgment.
           poll.current = pollFailure(poll.current, { now: t, message: res.error })
         } else {
           const changed = stalenessChanged(poll.current.signature, res.signature)
           poll.current = pollProbeResult(poll.current, { changed, signature: res.signature, now: t })
         }
-        // A RENDERT KIZÁRÓLAG a LÁTHATÓ jelzés változása váltja ki. A
-        // `setPollLabel` csak akkor ír, ha a szöveg TÉNYLEGESEN más — enélkül
-        // minden tick újrarenderelné a listát (React bail-outra hagyatkozni
-        // itt kockázatos: a state azonos stringre no-op, de a szándékot
-        // kimondjuk, mert ez a poll UI-költségének a garanciája).
+        // ONLY a change in the VISIBLE signal triggers a render. `setPollLabel`
+        // only writes when the text is ACTUALLY different — without this,
+        // every tick would re-render the list (relying on React's bail-out
+        // here is risky: the state is a no-op for an identical string, but we
+        // state the intent explicitly, because this is the guarantee behind
+        // the poll's UI cost).
         const label = pollStatusLabel(poll.current)
         setPollLabel((prev) => (prev === label ? prev : label))
       } finally {
-        // FINALLY: egy váratlan dobás sem hagyhatja az őrszemet felhúzva,
-        // különben a poll ÖRÖKRE leállna (és némán — pontosan a tiltott ág).
+        // FINALLY: an unexpected throw must not leave the sentinel raised,
+        // otherwise the poll would stop FOREVER (and silently — exactly the
+        // forbidden branch).
         probing.current = false
       }
     }, tickMs)
     return () => clearInterval(timer)
-    // A DEPENDENCY-LISTA SZÁNDÉKOSAN MINIMÁLIS: az intervallum a komponens
-    // életében egyszer jön létre. A kapuk és az állapot ref-en jönnek be (lásd
-    // a fenti indoklást), tehát nem is kellenek ide.
+    // THE DEPENDENCY LIST IS DELIBERATELY MINIMAL: the interval is created
+    // once in the component's lifetime. The gates and state come in via ref
+    // (see the rationale above), so they aren't needed here either.
   }, [pollIntervalMs, now])
 
   // --- A HÁTTÉR-REVIEW PROGRESSZ-TICKJE (#904) -------------------------------
@@ -3865,50 +3883,50 @@ export function App({
       // A user kérése: NYÍLLAL váltsunk utat, ne Tabbal. A Tab MEGMARAD
       // alternatívaként (a muscle memory miatt), de a lábléc a nyilat hirdeti.
       //
-      // EGY ÁGON él mind a három gomb, szándékosan: külön ágban a wrap-szabály
-      // és az armedAt-kezelés szétcsúszhatna (az egyik armol, a másik nem — és a
-      // dwell-kapu épp az, ami így kikerülhetővé válna). A léptetés a TESZTELT
-      // stepIndex-en megy át, nem inline modulón.
+      // All three keys live on ONE branch, deliberately: on separate branches the wrap
+      // rule and the armedAt handling could drift apart (one arms, the other doesn't — and
+      // the dwell gate is exactly what would become bypassable this way). The stepping goes
+      // through the TESTED stepIndex, not an inline module.
       //
-      // A 'b' (plafon be/ki) UGYANEZEN az ágon van, ugyanezért: ez sem
-      // megerősítés és nem megszakítás, tehát az armedAt-hoz NEM nyúlhat. Ha
-      // armolna, a plafon nyomkodásával a 250 ms-os kapu végtelenül újraindulna
-      // — a védelem kikerülhetővé válna azon az úton, amit épp most adtunk hozzá.
+      // 'b' (ceiling on/off) is on this SAME branch, for the same reason: this too is not
+      // a confirmation and not an abort, so it must NOT touch armedAt. If it armed,
+      // pressing the ceiling toggle would restart the 250 ms gate indefinitely
+      // — the protection would become bypassable via the very path we just added.
       if (confirm.kind === 'ai-review' && input === 'b' && confirm.budget) {
         patchModal({ budget: budgetToggle(confirm.budget) })
         return
       }
-      // (5b) AZ `m` A MODELL-VÁLTÓ — MIÉRT PONT AZ `m`, ÉS MIÉRT CIKLIKUS:
-      //   - a megerősítés-módban az `m` SZABAD kulcs: a merge `m`-je a LISTÁN
-      //     és az INLINE panelen él, ide (panelKeys szerint) el sem jut — a
-      //     mnemonika (modell) pedig pontosan illik;
-      //   - a közvetlen kulcsok (`o`/`s`/`f`) elvetve: az `f` a feltöltés
-      //     hirdetett kulcsa (két jelentés egy betűn zavar), és három betű
-      //     égetése egy háromelemű választékra aránytalan — a Tab-mintájú
-      //     ciklikus váltó (mint a review-útnál) egy kulcsból megoldja;
-      //   - az `armedAt`-hoz NEM nyúlunk (ugyanaz az érv, mint a 'b'/Tab
-      //     ágnál: a váltó nem armolhatja újra a dwell-kaput).
+      // (5b) `m` IS THE MODEL SWITCHER — WHY `m`, AND WHY CYCLIC:
+      //   - in confirmation mode `m` is a FREE key: merge's `m` lives on the LIST
+      //     and on the INLINE panel, it never reaches here (per panelKeys) — and the
+      //     mnemonic (model) fits exactly;
+      //   - direct keys (`o`/`s`/`f`) were rejected: `f` is the advertised
+      //     key for upload (two meanings on one letter confuses), and burning three keys
+      //     on a three-item choice is disproportionate — a Tab-style
+      //     cyclic switcher (like the review path) solves it with one key;
+      //   - `armedAt` is NOT touched (same argument as the 'b'/Tab
+      //     branch: the switcher must not re-arm the dwell gate).
       if (confirm.kind === 'ai-review' && input === 'm' && confirm.model) {
         patchModal({ model: modelStep(confirm.model, +1) })
         return
       }
-      // (5) A REVIEW-ÚT VÁLTÁSA NYILAK NÉLKÜL (user: "zavar, hogy jobbra-balra
-      // nyilat kell használnom"; az `R` nem használható — az a refresh):
-      //   - Tab: CIKLIKUS váltó. Miért a Tab: eddig is működött (muscle memory),
-      //     egyetlen billentyű, és nem ütközik a modál fel/le választó-listájával;
-      //   - 1..N: KÖZVETLEN, determinisztikus választás (a legenda hirdeti).
-      // A NYÍL a BUDGET-lépcsőé marad, amikor a plafon be van kapcsolva — így
-      // egyik funkció sem oszt billentyűt a másikkal némán. Kikapcsolt plafon
-      // mellett a nyíl NEM zárja a modált (az egy véletlen gesztusra eldobott
-      // döntés lenne), hanem kimondja az új utat.
-      // Az `armedAt`-hoz EGYIK ág sem nyúl: a váltó nem armolhatja újra a
-      // dwell-kaput (meglévő invariáns, teszt védi).
+      // (5) SWITCHING THE REVIEW PATH WITHOUT ARROWS (user: "it bothers me that I have to
+      // use left/right arrows"; `R` can't be used — that's refresh):
+      //   - Tab: CYCLIC switcher. Why Tab: it already worked (muscle memory),
+      //     a single key, and doesn't collide with the modal's up/down choice list;
+      //   - 1..N: DIRECT, deterministic selection (advertised by the legend).
+      // The ARROW stays for the BUDGET step, when the ceiling is turned on — this way
+      // neither feature silently shares a key with the other. With the ceiling off, the
+      // arrow does NOT close the modal (that would be a decision discarded by a random
+      // gesture), but instead states the new path out loud.
+      // NEITHER branch touches `armedAt`: the switcher must not re-arm the
+      // dwell gate (existing invariant, guarded by a test).
       if (confirm.kind === 'ai-review' && (key.leftArrow || key.rightArrow)) {
         if (confirm.budget?.enabled === true) {
           patchModal({ budget: budgetStep(confirm.budget, key.leftArrow ? -1 : +1) })
           return
         }
-        setNotice('a review-utat a Tab (váltás) vagy az 1/2 (közvetlen) választja — a nyíl nem')
+        setNotice('the review path is chosen by Tab (switch) or 1/2 (direct) — not the arrow')
         return
       }
       if (confirm.kind === 'ai-review' && key.tab && Array.isArray(confirm.paths)) {
@@ -3921,50 +3939,51 @@ export function App({
           patchModal({ pathIndex: idx })
           return
         }
-        // A tartományon kívüli szám NEM zárja a modált (nem megszakítás-szándék).
-        setNotice(`csak ${confirm.paths.length} review-út van — 1..${confirm.paths.length}`)
+        // A number out of range does NOT close the modal (not an abort intent).
+        setNotice(`only ${confirm.paths.length} review path(s) — 1..${confirm.paths.length}`)
         return
       }
-      // A NYILAS VÁLASZTÁS LÉPTETÉSE (a user 2. elve). A fel/le itt SOSEM a
-      // listát mozgatja: a kurzor elmozdulása egy várakozó, visszavonhatatlan
-      // döntés alól fegyver (ugyanaz a kockázat, amiért a háttér-poll sem tölt
-      // újra magától).
+      // STEPPING THE ARROW-BASED CHOICE (the user's 2nd principle). Up/down here NEVER
+      // moves the list: moving the cursor is a weapon under a pending, irreversible
+      // decision (the same risk why the background poll doesn't reload
+      // on its own either).
       //
-      // Az `armedAt`-hoz NEM nyúlunk: a léptetés nem megerősítés és nem
-      // megszakítás, tehát a dwell-kaput nem indítja újra (ugyanaz az érv, mint a
-      // 'b'/Tab ágnál — újra-armolás a nyíl nyomkodásával kikerülhetővé tenné).
-      // A `modalHasChoices` KÖZÖS forrás a lábléccel és a body-val: ahol nincs
-      // lista, a nyíl NEM lop billentyűt (és nem is hirdetjük — dead key lenne).
-      // (wf31/69) A BALRA/JOBBRA IS LÉPTET — a user kérése, és a megjelenítés
-      // iránya ezt kívánja (`▸ Nem   Igen` egy sorban). A fel/le MEGMARAD: a
-      // korábbi izommemóriát nem törjük, csak a hirdetés vált vízszintesre.
-      // A LÉPTETÉS IRÁNYA a képhez illik: jobbra/le = előre, balra/fel = vissza.
+      // We do NOT touch `armedAt`: stepping is not a confirmation and not an
+      // abort, so it doesn't restart the dwell gate (same argument as the
+      // 'b'/Tab branch — re-arming via arrow-mashing would make it bypassable).
+      // `modalHasChoices` is the SHARED source with the footer and the body: where
+      // there's no list, the arrow does NOT steal a key (and we don't advertise it — it
+      // would be a dead key).
+      // (wf31/69) LEFT/RIGHT ALSO STEP — the user's request, and the display
+      // direction calls for it (`▸ No   Yes` on one line). Up/down STAYS: we don't
+      // break the earlier muscle memory, only the advertisement switches to horizontal.
+      // THE STEP DIRECTION matches the picture: right/down = forward, left/up = back.
       if ((key.downArrow || key.upArrow || key.leftArrow || key.rightArrow)
         && modalHasChoices(confirm.kind)) {
         setChoiceIndex((i) => modalChoiceStep(i, key.downArrow || key.rightArrow ? +1 : -1))
         return
       }
-      // AZ ENTER a KIVÁLASZTOTT ágat hajtja végre — DE NEM SAJÁT ÚTON.
+      // ENTER executes the SELECTED branch — BUT NOT ON ITS OWN PATH.
       //
-      // A 'NEM'-en zár (nincs hatás), és ez a NYITÓ állapot: egy vaktában leütött
-      // Enter SOSEM indít semmit. Az IGEN-en pedig a `y`-ra NORMALIZÁLJUK, és a
-      // továbbiakban a MEGLÉVŐ 'y'-út fut le.
+      // It closes on 'NO' (no effect), and that's the OPENING state: an Enter pressed
+      // blindly NEVER starts anything. On 'YES' we NORMALIZE it to `y`, and from
+      // there the EXISTING 'y' path runs.
       //
-      // MIÉRT NORMALIZÁLÁS ÉS MIÉRT NEM KÜLÖN ÁG: egy önálló Enter-ág MEGKERÜLNÉ
-      // a dwell-kaput, ha valaha kimaradna belőle a `confirmAccepts` — vagyis a
-      // nyilas választás bevezetése egy KERÜLŐUTAT nyitna a legdrágább
-      // (token-költő, illetve GitHubra posztoló) akciókhoz. Így a kapu-hívás és a
-      // "túl korai" jelzés is EGY helyen él, és a source-invariáns tesztek
-      // (verify-silent) egyetlen elfogadó pontot látnak.
+      // WHY NORMALIZE AND WHY NOT A SEPARATE BRANCH: a standalone Enter branch would
+      // BYPASS the dwell gate if the `confirmAccepts` call were ever missing from it — i.e.
+      // introducing arrow-based choice would open a BYPASS to the most expensive
+      // (token-spending, or GitHub-posting) actions. This way the gate call and the
+      // "too early" signal also live in ONE place, and the source-invariant tests
+      // (verify-silent) see a single accepting point.
       let effective = input
       if (key.return) {
         if (MODAL_CHOICES[choiceIndex]?.id !== 'yes') {
-          // (wf28/1) A régi `restoreAiPrevDone()` hívás KIESETT. Kétszeresen is
-          // halott volt: a `kind === 'ai-review'` modál MÁR NEM NYÍLIK MEG (lásd
-          // az indító-ág fejét lentebb), és a mentés-visszaadás mechanizmus maga
-          // is megszűnt (a menü-nyitás többé nem ír `aiReview` state-et).
+          // (wf28/1) The old `restoreAiPrevDone()` call was REMOVED. It was doubly
+          // dead: the `kind === 'ai-review'` modal NO LONGER OPENS (see
+          // the launcher branch's doc head below), and the save-restore mechanism
+          // itself was also discontinued (opening the menu no longer writes `aiReview` state).
           setPanel(panelToInline)
-          setNotice('megszakítva')
+          setNotice('cancelled')
           return
         }
         effective = 'y'
@@ -3972,65 +3991,67 @@ export function App({
       if (confirmAccepts(confirm, effective) && confirm.blockers.length === 0) {
         const { kind } = confirm
         const row = panel.row
-        // VISSZA A PANELRE, nem a listára: a mért diagnózis ott marad, tehát az
-        // akció után a user ugyanazt a képet látja, amiből döntött.
+        // BACK TO THE PANEL, not the list: the measured diagnosis stays there, so after
+        // the action the user sees the same picture they decided from.
         setPanel(panelToInline)
         if (kind === 'approve') doApprove(row)
         if (kind === 'merge') doMerge(row)
-        // (wf31/73) A CONFLICT-FELOLDÁS INDÍTÁSA — CSAK INNEN, a megerősítés után.
+        // (wf31/73) STARTING CONFLICT RESOLUTION — ONLY FROM HERE, after confirmation.
         //
-        // A CÉL A MODÁLBÓL jön (`resolveModalProps` tette bele), NEM a render-időben
-        // számolt `stackOffer`-ből: a modál nyitása és a `y` között a user
-        // navigálhatott, és a mérés is befuthatott — egy render-időben újraolvasott
-        // cél MÁS PR-ra indíthatná a feloldást, mint amit a kérdés megnevezett.
-        // A modálba zárt érték ezt strukturálisan kizárja.
+        // THE TARGET COMES FROM THE MODAL (`resolveModalProps` put it there), NOT from a
+        // `stackOffer` computed at render time: between opening the modal and pressing `y`
+        // the user could have navigated, and the measurement could have completed — a
+        // target re-read at render time could start the resolution on a DIFFERENT PR than
+        // the one the question named. The value locked into the modal structurally rules
+        // this out.
         if (kind === 'resolve' && Number.isInteger(confirm.stackOn)) doResolve(row, confirm.stackOn)
-        // A GitHubra POSZTOLÓ feltöltés is CSAK innen indul (lásd az 'f' ágat).
+        // The upload that POSTS to GitHub also starts ONLY from here (see the 'f' branch).
         if (kind === 'upload') doUpload(row)
-        // (2) AZ `ai-review` ÁG INNEN KIVEZETVE. A token-költő út MOSTANTÓL a
-        // REVIEW-CASCADE-MENÜ `y`-ágán indul (lásd a useInput menü-ágát), a saját
-        // dwell-kapu-hívásával — a bőbeszédű megerősítő modál megszűnt, tehát ez
-        // az ág DEAD CODE volt (a `kind === 'ai-review'` modál már nem nyílik meg).
+        // (2) THE `ai-review` BRANCH REMOVED FROM HERE. The token-spending path now
+        // starts on the REVIEW-CASCADE MENU's `y` branch (see useInput's menu branch), with
+        // its own dwell-gate call — the verbose confirmation modal was discontinued, so this
+        // branch was DEAD CODE (the `kind === 'ai-review'` modal no longer opens).
         //
-        // MIÉRT TÖRÖLTEM, ÉS NEM HAGYTAM OTT "biztos, ami biztos": egy elérhetetlen
-        // indító ág a legdrágább akcióhoz pont az a hely, ahol egy későbbi
-        // módosítás NÉMÁN kerülőutat nyithat — és a source-invariáns tesztek is
-        // ezt az ágat számolták az "egy elfogadó pont" bizonyítékának. A KÖTELEM
-        // MEGMARADT, csak EGY helyre került: minden akcióhoz PONTOSAN EGY,
-        // dwell-kapuval védett indító út tartozik.
+        // WHY I DELETED IT, AND DIDN'T LEAVE IT THERE "just in case": an unreachable
+        // launcher branch for the most expensive action is exactly the place where a later
+        // change can SILENTLY open a bypass — and the source-invariant tests also
+        // counted this branch as the proof of "one accepting point". THE OBLIGATION
+        // REMAINS, it just moved to ONE place: every action has EXACTLY ONE
+        // dwell-gate-protected launch path.
         return
       }
-      // A túl korai 'y'-t NEM tekintjük megszakításnak: az ekrán nyitva marad, és
-      // EGY RÖVID sor jelzi, hogy nyomja meg újra. Ha itt bezárnánk, a user azt
-      // hinné, hogy megszakadt, és újra elindítaná az egészet.
+      // A too-early 'y' is NOT treated as an abort: the screen stays open, and
+      // a SHORT line signals to press it again. If we closed it here, the user would
+      // think it aborted, and would start the whole thing over again.
       //
-      // MIÉRT NINCS ITT HOSSZABB MAGYARÁZAT: a mechanizmus indoklása (Ink
-      // raw-mode puffer, typeahead) a fejlesztőt érdekli, nem a felhasználót — az
-      // a kódkommentekben él (fentebb + core/confirmAccepts). A user kifogása
-      // pontosan az volt, hogy a UI-ban ez a próza érthetetlen.
-      // Az `effective` (nem a nyers `input`): a NORMALIZÁLT Enter-igen is ide
-      // esik, ha a dwell még nem telt le — enélkül az Enter-út a "bármely más
-      // gomb" ágra futna, tehát NÉMÁN BEZÁRNÁ a modált, és a user azt hinné,
-      // megszakadt. Ez pont a fenti indoklás fordítottja, ugyanazon a jelzésen.
+      // WHY THERE'S NO LONGER EXPLANATION HERE: the mechanism's rationale (Ink
+      // raw-mode buffer, typeahead) is of interest to the developer, not the user — that
+      // lives in the code comments (above + core/confirmAccepts). The user's complaint
+      // was exactly that this prose was incomprehensible in the UI.
+      // `effective` (not the raw `input`): the NORMALIZED Enter-yes also falls
+      // here if the dwell hasn't elapsed yet — without this the Enter path would fall
+      // through to the "any other key" branch, i.e. it would SILENTLY CLOSE the modal, and
+      // the user would think it aborted. This is exactly the reverse of the rationale
+      // above, on the same signal.
       if (effective === 'y') {
-        setNotice('túl korai — nyomd meg újra')
+        setNotice('too early — press again')
         return
       }
-      // BÁRMELY MÁS GOMB (az Esc és a q is): a MODÁL zárul, a TUI NEM lép ki.
-      // A megszakítás sosem késleltetett (lásd a dwell aszimmetriáját): ingyen
-      // van, tehát a pufferelt keypress is elvégezheti — az a fail-closed irány.
-      // A 'q'/Esc itt szándékosan NEM kilépés: nyitott overlaynél a kilépés-ág
-      // elérhetetlen (ez az ágsorrend teszt alatt van).
+      // ANY OTHER KEY (Esc and q too): the MODAL closes, the TUI does NOT exit.
+      // Aborting is never delayed (see the dwell's asymmetry): it's free,
+      // so a buffered keypress can also perform it — that's the fail-closed direction.
+      // 'q'/Esc here is deliberately NOT exit: with an overlay open the exit branch is
+      // unreachable (this is guarded by a branch-order test).
       //
-      // A ZÁRÁS A PANELRE VISZ VISSZA (`panelToInline`), nem a listára — ez a
-      // konszolidáció lényege: a "megnézem → cselekszem → meggondolom magam →
-      // visszanézem" kör a panelen BELÜL zárul, és a mért diagnózis nem veszik el
-      // egy meggondolt-magam gesztus miatt.
-      // (wf28/1) A régi `restoreAiPrevDone()` hívás KIESETT — ugyanaz a két ok,
-      // mint az Enter-normalizálás ágán: az `ai-review` modál nem nyílik meg, és
-      // a mentés-visszaadás mechanizmus megszűnt.
+      // CLOSING GOES BACK TO THE PANEL (`panelToInline`), not the list — this is the
+      // essence of the consolidation: the "look → act → change my mind →
+      // look again" loop closes WITHIN the panel, and the measured diagnosis isn't lost
+      // over a change-my-mind gesture.
+      // (wf28/1) The old `restoreAiPrevDone()` call was REMOVED — same two reasons
+      // as on the Enter-normalization branch: the `ai-review` modal no longer opens, and
+      // the save-restore mechanism was discontinued.
       setPanel(panelToInline)
-      setNotice('megszakítva')
+      setNotice('cancelled')
       return
     }
 
