@@ -43,6 +43,12 @@ See [ROADMAP.md](ROADMAP.md) for the sequence and the reasoning behind it.
   an attestation into the GitHub audit trail, so the intent behind a merge
   outlives someone's shell history.
 
+![The detail panel for a single pull request](docs/panel.svg)
+
+The panel separates what was **measured** from what was merely queried. It
+states the landing blockers it knows, and says outright that the conflict axis
+is *not measured* rather than leaving the silence to be read as "fine".
+
 ## Design principles
 
 **Fail closed.** A silent success is a bug class, not a convenience. An empty
