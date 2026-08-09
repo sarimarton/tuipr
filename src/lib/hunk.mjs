@@ -1299,7 +1299,7 @@ export function hunkSessionAlive(res) {
   if (res.status === 0) return true
   const stderr = String(res.stderr ?? '').trim()
   const stdout = String(res.stdout ?? '').trim()
-  if (/no active session/i.test(stderr)) return false
+  if (NO_ACTIVE_SESSION_RE.test(stderr)) return false
   // THE SILENT non-zero exit: no readable session state → fail-soft "none".
   if (stderr === '' && stdout === '') return false
   // A NAMED OTHER error: we don't guess.
@@ -1453,11 +1453,32 @@ export const HUNK_SESSION_HINT =
  * enough — better a raw error than a FALSE diagnosis that sends the user
  * looking for a session over an install/daemon problem.
  */
+/**
+ * The "there is no live session" wording, tolerantly.
+ *
+ * MEASURED, AND THIS WAS A REAL BUG: the pattern used to be the exact phrase
+ * `no active session`, and hunk 0.17.0 actually says
+ *
+ *   "No active Hunk sessions are registered with the daemon."
+ *
+ * — a word inserted in the middle and a plural, so the match failed. The
+ * consequence was not a wrong message but a WRONG BRANCH: the caller could no
+ * longer tell "no session yet" from "something is broken", stopped falling
+ * back to opening one, and the very first `d` on a clean machine died instead
+ * of showing the diff. The code's own comment claimed it deliberately avoided
+ * matching an exact string; it did not, and only running it revealed that.
+ *
+ * The shape is therefore anchored on what the sentence MEANS — an absence of
+ * an active session — and stays indifferent to the words hunk puts between,
+ * and to singular versus plural.
+ */
+const NO_ACTIVE_SESSION_RE = /\bno active\b[^.]*\bsessions?\b/i
+
 export function isNoActiveSession(res) {
   if (!res || res.status === 0) return false
   const stderr = String(res.stderr ?? '').trim()
   const stdout = String(res.stdout ?? '').trim()
-  if (/no active session/i.test(stderr)) return true
+  if (NO_ACTIVE_SESSION_RE.test(stderr)) return true
   // Signal (2) ONLY decides if hunk said nothing at all — alongside a NAMED
   // other error, "no session" would be a guess.
   return stderr === '' && stdout === ''
