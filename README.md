@@ -1,38 +1,77 @@
 # tuipr
 
-**Terminal review workstation for agent-generated pull requests.**
+**A terminal review workstation for agent-generated pull requests.**
 
-Coding agents can open PRs faster than you can read them. The bottleneck is no
-longer writing code or even reviewing mechanics — it is human attention and
-spend discipline. tuipr is a TUI that puts a human gate in front of the
-merge: a PR queue with computed landability, hunk-level diff review, budgeted
-AI review runs, and approvals that leave an attestation in the audit trail.
+Coding agents open pull requests faster than anyone can read them. The
+bottleneck stopped being how fast code gets written, or even how review
+mechanics work — it is human attention, and the discipline to decide what a
+review is worth spending. tuipr puts a human gate in front of the merge, in the
+terminal, where the rest of the work already happens.
 
 ## Status
 
-Early extraction in progress. The tool exists and is in daily use in a private
-setting; it is being generalized and published here piece by piece. Not yet
-installable — watch the repo if you're interested.
+**Early. Runs, not yet releasable.** The tool grew inside a private codebase and
+is being generalized in the open. What works today:
+
+- the PR queue, with computed status, against any GitHub repository
+- navigation and the detail panel
+- the diff, approve and merge paths, inherited from the original tool
+
+What is still in progress: comments and interface strings are being translated
+from Hungarian, and the packaged install is not finished. See
+[ROADMAP.md](ROADMAP.md) for the sequence and the reasoning behind it.
 
 ## What it does
 
-- **Queue** — every open PR with its computed status (landable / conflicted /
-  blocked / draft), reconstructed from git and the GitHub API, stacked PRs
-  rendered under their base.
-- **Review** — hand the terminal to a hunk-level diff viewer, comment inline,
-  upload findings as a single GitHub review.
-- **AI review, budgeted** — run a coding agent on the selected PR in the
-  background with an explicit spend cap; findings land as notes in the diff
-  viewer. Deliberate friction against accidental double spend.
-- **Gates** — merge behind independent gates; approvals write an attestation
-  body into the GitHub audit trail so intent survives outside shell history.
+- **Queue.** Every open PR with its computed status — landable, conflicted,
+  blocked, draft. Status is computed in one place and only displayed elsewhere,
+  so the list cannot disagree with the detail panel.
+- **Review.** Hand the terminal to a hunk-level diff viewer, comment inline, and
+  upload the findings as one review rather than a scatter of comments.
+- **Budgeted AI review.** Run a coding agent over the selected PR in the
+  background under an explicit spend cap. Findings arrive as notes inside the
+  diff. Starting a second run takes a deliberate keystroke — accidental double
+  spend should be hard, not merely regrettable.
+- **Gates and attestation.** Merges pass independent gates, and approvals write
+  an attestation into the GitHub audit trail, so the intent behind a merge
+  outlives someone's shell history.
 
 ## Design principles
 
-- Fail closed. Silent success is a bug class, not a convenience.
-- Spend is a decision, not a side effect.
-- Provenance over convenience: what happened must be reconstructible from the
-  audit trail alone.
+**Fail closed.** A silent success is a bug class, not a convenience. An empty
+result and a failed query must never look the same to the caller.
+
+**Spend is a decision, never a side effect.** The interface states plainly
+whether tokens were spent — in both directions, including when they were not.
+
+**Measured and inferred knowledge stay apart.** A missing measurement is
+reported as missing, never as a zero. The consumer cannot tell a measured
+negative from an absent one, so the producer must not blur them.
+
+## Requirements
+
+- Node 20 or newer
+- [`gh`](https://cli.github.com), authenticated (`gh auth login`)
+- `git`
+- [`hunk`](https://github.com/modem-dev/hunk) for diff review — `brew install hunk`
+
+## Architecture
+
+The queue model is a **contract**, not an implementation. Classification,
+landability and approvability are computed by a provider; every layer above
+displays them and never recomputes them.
+
+The default provider uses nothing but `gh` and `git`, so it runs against any
+repository. `TUIPR_QUEUE_CMD` substitutes any command that emits the same JSON,
+which is how a richer, measurement-based model — conflict sources, transitive
+stacking — can return without the interface changing.
+
+```
+provider (gh + git)  →  queue model  →  rows / panel / actions
+        ▲                                        │
+        └──────── TUIPR_QUEUE_CMD ───────────────┘
+                  (any other producer)
+```
 
 ## License
 

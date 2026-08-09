@@ -8,25 +8,36 @@ stalls when every milestone is "clean up a bit more", so the order below is
 deliberately: get a working vertical slice on a public repository first, then
 widen it. An ugly tool that runs beats a beautiful one that doesn't.
 
-## M1 — A vertical slice that runs on any public repo
+## M1 — A vertical slice that runs on any public repo ✅
 
-**Done when:** `tuipr` starts against an arbitrary public GitHub repository,
-lists open PRs with their status, navigates, and opens a diff. Untranslated
-strings and missing features are acceptable at this milestone.
+**Reached.** `tuipr` starts against an arbitrary GitHub repository, lists open
+PRs with computed status, navigates, and opens the detail panel. Verified live
+against `cli/cli` (65 open PRs): drafts, conflicts, approvals and the
+changes-requested case all classify correctly.
+
+Two findings from getting here are worth keeping:
+
+- **`mergeStateStatus: BLOCKED` alone does not mean a blocked PR.** On a
+  repository that requires review, *every* open PR reports it — it is the
+  ordinary awaiting-review state. Treating it as blocked would paint the whole
+  list red and distinguish nothing. Only a human's `CHANGES_REQUESTED` counts.
+- **`node-pty` does not survive `bun build --compile`.** It resolves its native
+  addon through a dynamically built path, and the bundler can only embed
+  addons it sees as a static literal. This does not block single-file binaries:
+  the terminal handoff already has a second path that uses `script(1)`, an
+  external binary, and that path compiles. The cost is losing an escape-sequence
+  filter, so the binary flickers slightly on returning from the diff viewer.
+  The clean fix is upstream — a flag asking the viewer not to manage the
+  alternate screen — which is worth a patch rather than a fork.
 
 The existing TUI is a pure consumer of one contract: a JSON queue model. It
 never recomputes classification, landability or approvability — it displays
 them. That contract is the seam.
 
-- [ ] Treat the queue JSON as a **provider interface** and write a second
-      implementation of it that depends only on `gh` and `git` — no
-      integration-branch convention, no private workflow assumptions.
-- [ ] Port the TUI across unchanged against that provider.
-- [ ] **Spike: does the app survive `bun build --compile`?** The terminal
-      handoff uses `node-pty`, a native addon, and native modules are the known
-      sharp edge for single-executable compilation. This is scheduled in M1 —
-      not M3 — because a negative result is an architecture problem, not a
-      packaging problem, and it is cheap to learn now.
+- [x] Treat the queue JSON as a **provider interface** and write a second
+      implementation of it that depends only on `gh` and `git`.
+- [x] Port the TUI across unchanged against that provider.
+- [x] **Spike: does the app survive `bun build --compile`?**
 
 The richer conflict-prediction model (which PRs will collide, and why) is
 **additive**, not foundational: it is a second, better provider behind the same
