@@ -53,13 +53,17 @@ interface, and it lands after M1.
 
 ## M3 — Installable
 
-- [ ] `npm i -g tuipr`, with `hunkdiff` as a direct dependency so one install
-      brings the whole loop. Binary resolution already exists in the code and
-      points at a resolved path rather than `PATH`.
-- [ ] Pin the diff-reviewer dependency to an **exact** version. It publishes
-      very frequently; a caret range would import breaking changes silently.
+- [x] `npm i -g tuipr` works — verified by packing the tarball, installing it
+      into a clean project and running the installed binary.
+- [x] **The diff viewer is not bundled.** Depending on it directly took the
+      install from 23 MB to 367 MB: 97 MB of platform binary, 61 MB of bun,
+      23 MB of typescript, plus 62 MB for `node-pty`. One command to install
+      one binary (`brew install hunk`) is the better trade, and the code
+      already resolved it from `PATH`. This reverses an earlier plan — the
+      measurement decided it.
 - [ ] Onboarding docs: authentication, requirements, first run.
-- [ ] Single-file binaries + a Homebrew tap, if the M1 spike came back green.
+- [ ] Single-file binaries + a Homebrew tap. The M1 spike came back green for
+      this, with the caveat noted above.
 
 ## M4 — Portfolio grade
 
