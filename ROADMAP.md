@@ -43,6 +43,20 @@ The richer conflict-prediction model (which PRs will collide, and why) is
 **additive**, not foundational: it is a second, better provider behind the same
 interface, and it lands after M1.
 
+## What still calls the original script
+
+Exactly two paths, both narrow and both failing loudly rather than silently:
+
+| key | feature | why it needs the script |
+|---|---|---|
+| `c` | conflict measurement | runs `merge-tree` probes against the PRs ahead in the queue and reports which ones actually collide |
+| `v` | AI conflict resolution | drives a resolution attempt and reports whether a marker was left behind |
+
+Everything else — the queue, diff review, budgeted AI review, approval and
+merge — runs without it. Generalizing the measurement is the natural home for
+the richer provider described above, since that is where the measured
+`classification` and `dep` fields come from.
+
 ## M2 — Decoupling and English
 
 - [ ] Remove workplace-specific vocabulary, allowlists and defaults.

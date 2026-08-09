@@ -17,9 +17,12 @@ is being generalized in the open. What works today:
 - navigation and the detail panel
 - the diff, approve and merge paths, inherited from the original tool
 
-What is still in progress: comments and interface strings are being translated
-from Hungarian, and the packaged install is not finished. See
-[ROADMAP.md](ROADMAP.md) for the sequence and the reasoning behind it.
+Two features are **not** wired up, because they call a measurement script that
+has not been generalized yet: conflict measurement (`c`) and AI conflict
+resolution (`v`). They fail loudly rather than quietly — the missing script is
+reported as such — and nothing else depends on them.
+
+See [ROADMAP.md](ROADMAP.md) for the sequence and the reasoning behind it.
 
 ## What it does
 
