@@ -8,6 +8,10 @@ mechanics work — it is human attention, and the discipline to decide what a
 review is worth spending. tuipr puts a human gate in front of the merge, in the
 terminal, where the rest of the work already happens.
 
+![tuipr showing the open pull requests of cli/cli](docs/screenshot.svg)
+
+*Real output, not a mockup — the open pull requests of `cli/cli`, classified.*
+
 ## Status
 
 **Early. Runs, not yet releasable.** The tool grew inside a private codebase and

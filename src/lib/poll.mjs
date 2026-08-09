@@ -490,8 +490,8 @@ export function headerLine({
   // typographic weight — the em dash is the established "title — subtitle"
   // form. The cell arithmetic stays intact: `displayWidth` also measures the
   // space as 1, so the degradation (candidate list) counts correctly.
-  const TITLE = 'next queue —  review workstation'
-  const SHORT_TITLE = 'next queue'
+  const TITLE = 'tuipr —  review workstation'
+  const SHORT_TITLE = 'tuipr'
   const SEP = '  ·  '
   const label = typeof pollLabel === 'string' ? pollLabel : ''
   // DURING LOADING THE HEADER IS ONLY THE TITLE + SHA (user request): the
