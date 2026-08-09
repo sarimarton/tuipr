@@ -1,28 +1,22 @@
 #!/usr/bin/env node
 
-// Placeholder entry point.
+// tuipr — a telepített parancs belépési pontja.
 //
-// The package name is reserved while the tool is being extracted from a
-// private codebase and generalized. This file exists so that anyone who
-// installs the package gets an honest answer instead of a silent no-op —
-// a released `bin` that does nothing is worse than no release at all.
+// Szándékosan vékony: a logika a `src/tui.mjs`-ben él, ez csak elindítja. NEM
+// az entry-heurisztikára bízzuk magunkat (`import.meta.url === argv[1]`), mert
+// telepítve ez a fájl a main, nem a `src/tui.mjs` — az ottani `isMain` tehát
+// hamis lenne, és a TUI némán, 0 bájt kimenettel térne vissza. Ezért expliciten
+// a `main()`-t hívjuk.
 //
-// It is deliberately dependency-free and prints to stderr with a non-zero
-// exit, so a script that shells out to `tuipr` fails loudly rather than
-// appearing to succeed.
+// A HIBAKEZELÉS HANGOS: minden váratlan hiba teljes stack trace-szel dobódik.
+// Néma exit-ág nincs — az a hibaosztály itt már egyszer élesben harapott.
 
-process.stderr.write(
-  [
-    'tuipr is not released yet — this is a reserved package name.',
-    '',
-    'The tool is a terminal review workstation for agent-generated pull',
-    'requests: a PR queue with computed landability, hunk-level diff review,',
-    'budgeted AI review runs, and approvals that leave an attestation in the',
-    'audit trail.',
-    '',
-    'Progress and release notes: https://github.com/sarimarton/tuipr',
-    '',
-  ].join('\n'),
-)
+import process from 'node:process'
+import { main } from '../src/tui.mjs'
 
-process.exit(1)
+try {
+  await main()
+} catch (error) {
+  process.stderr.write(`tuipr: ${error?.stack || error}\n`)
+  process.exit(1)
+}

@@ -295,7 +295,14 @@ const isMain = (() => {
 // A React/Ink rész csak akkor töltődik be, ha tényleg TUI-ként futunk — így a
 // unit-tesztek (amik csak a tiszta függvényeket importálják) nem igényelnek
 // telepített inket.
-if (isMain) {
+//
+// MIÉRT FÜGGVÉNY, ÉS NEM CSAK EGY `if (isMain)` BLOKK: a telepített parancs
+// (`bin/tuipr.mjs`) nem EZ a fájl, tehát az `isMain` ott hamis lenne, és a TUI
+// néma no-opként térne vissza — pontosan az a hibaosztály, amit a fenti
+// realpath-javítás egyszer már kiirtott. A bin ezért a `main()`-t hívja, nem
+// az entry-heurisztikára bízza magát. Az `isMain`-ág megmarad, hogy a fájl
+// közvetlenül futtatva is működjön (fejlesztés, teszt).
+export async function main() {
   // Az app-modul útja env-ből felülírható — ez a teszt-fogantyú a "nem
   // resolválható függőség" ág fedezésére (más célra ne használd).
   const appModule = process.env.TUIPR_NEXT_TUI_APP || './tui-app.mjs'
@@ -354,6 +361,8 @@ if (isMain) {
   installEscapeTrace()
   if (runTui) await runTui()
 }
+
+if (isMain) await main()
 
 /**
  * DIAGNOSZTIKA — ESCAPE-SZEKVENCIA TRACE, opt-in, alapból NEM fut.
