@@ -1,23 +1,25 @@
 #!/usr/bin/env node
 
-// Egy VALÓDI terminál-képernyőt SVG-vé alakít, hogy a README és a landing egy
-// futó tool képét mutathassa.
+// Converts a REAL terminal screen into an SVG, so the README and the landing
+// page can show the image of a running tool.
 //
-// MIÉRT NEM KÉPERNYŐFOTÓ: a raszteres kép elmosódik, nem kereshető, sötét/világos
-// témára nem reagál, és minden frissítéskor kézi munkát igényel. Az SVG szöveg
-// marad: éles minden felbontáson, verziókövethető, és a diffje olvasható.
+// WHY NOT A SCREENSHOT: the raster image blurs, isn't searchable, doesn't
+// respond to dark/light theme, and requires manual work on every update. The
+// SVG stays text: sharp at any resolution, version-controllable, and its diff
+// is readable.
 //
-// MIÉRT NEM KÜLSŐ ESZKÖZ: az asciinema/vhs/agg mind telepítést kíván. A bemenet
-// (`tmux capture-pane -e`) viszont már ANSI-t ad, és a fordítás annyira szűk
-// feladat, hogy egy külső függőség többe kerülne, mint amennyit ér.
+// WHY NOT AN EXTERNAL TOOL: asciinema/vhs/agg all require installation. The
+// input (`tmux capture-pane -e`) already gives ANSI, though, and the
+// conversion is such a narrow task that an external dependency would cost
+// more than it's worth.
 //
-// HASZNÁLAT:  tmux capture-pane -t <pane> -e -p | node scripts/ansi-to-svg.mjs > demo.svg
+// USAGE:  tmux capture-pane -t <pane> -e -p | node scripts/ansi-to-svg.mjs > demo.svg
 
 import process from 'node:process'
 
-// Az alap-16 paletta. SZÁNDÉKOSAN nem egy terminál-emulátor pontos témája: a
-// cél a hitelesség, nem a bájt-azonosság — ezek a színek sötét háttéren
-// olvashatók, és a WCAG-kontrasztot tartják.
+// The base-16 palette. DELIBERATELY not the exact theme of a terminal
+// emulator: the goal is fidelity, not a byte-identical match — these colors
+// are readable on a dark background and hold WCAG contrast.
 const PALETTE = [
   '#1c1b18', '#e05252', '#7fb069', '#e0a458', '#5b9bd5', '#b07fc7', '#4fb3a5', '#d6d3cb',
   '#6b6862', '#f07171', '#98c379', '#f0c674', '#7cb7e8', '#c8a2d8', '#6fd3c4', '#f5f3ee',
@@ -29,15 +31,16 @@ const CELL_W = 8.4
 const CELL_H = 18
 const PAD = 16
 
-/** Egy cella stílusa. A `bold` külön mező, mert a fontweightet a tspan hordozza. */
+/** The style of a single cell. `bold` is a separate field because the tspan carries the font weight. */
 function newStyle() {
   return { fg: null, bold: false, dim: false, inverse: false }
 }
 
 /**
- * SGR-paraméterek alkalmazása. CSAK azt kezeljük, amit egy TUI valóban használ
- * (szín, bold, dim, inverse, reset) — a többit SZÁNDÉKOSAN eldobjuk, mert egy
- * félig implementált ritka attribútum rosszabb, mint a hiánya: hamis képet adna.
+ * Applies SGR parameters. We ONLY handle what a TUI actually uses (color,
+ * bold, dim, inverse, reset) — the rest we DELIBERATELY drop, because a
+ * half-implemented rare attribute is worse than not having it: it would give
+ * a false picture.
  */
 function applySgr(style, params) {
   for (let i = 0; i < params.length; i++) {
@@ -51,8 +54,9 @@ function applySgr(style, params) {
     if (p === 39) { style.fg = null; continue }
     if (p >= 30 && p <= 37) { style.fg = PALETTE[p - 30]; continue }
     if (p >= 90 && p <= 97) { style.fg = PALETTE[p - 90 + 8]; continue }
-    // 38;5;N — a 256-os paletta. Az első 16 a fenti; a többit a szürke- és a
-    // színkockából közelítjük, mert a pontos leképzés itt nem ér annyit.
+    // 38;5;N — the 256-color palette. The first 16 are the ones above; the
+    // rest we approximate from the grayscale ramp and the color cube, because
+    // exact mapping isn't worth it here.
     if (p === 38 && params[i + 1] === 5) {
       const n = params[i + 2]
       i += 2
@@ -71,7 +75,7 @@ function escapeXml(s) {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 }
 
-/** Egy sor ANSI-szövegét egyforma stílusú darabokra bontja. */
+/** Splits a line's ANSI text into chunks of uniform style. */
 function parseLine(line, style) {
   const spans = []
   let buf = ''
@@ -108,8 +112,8 @@ const input = await new Promise((resolve) => {
   process.stdin.on('end', () => resolve(s))
 })
 
-// A záró üres sorokat levágjuk — a tmux a pane teljes magasságát adja, és egy
-// félig üres kép azt sugallná, hogy a tool nem tölti ki a képernyőt.
+// We trim the trailing empty lines — tmux gives the pane's full height, and a
+// half-empty image would suggest the tool doesn't fill the screen.
 const lines = input.replace(/\s+$/, '').split('\n')
 const cols = Math.max(...lines.map((l) => l.replace(/\[[0-9;]*[a-zA-Z]/g, '').length))
 const width = Math.ceil(cols * CELL_W + PAD * 2)
