@@ -57,6 +57,25 @@ merge — runs without it. Generalizing the measurement is the natural home for
 the richer provider described above, since that is where the measured
 `classification` and `dep` fields come from.
 
+**The integration-queue path is retained, deliberately.** It would be easy to
+read the measured provider — stacking, conflict sources, rebuild status — as
+legacy from the private workflow this tool grew in, to be phased out. The
+opposite decision stands, and it is grounded in a real outcome: the team the
+original producer serves re-evaluated moving to a plain dev-branch model and
+stayed on the integration queue, because with semilinear merges the queue
+preserves commit SHAs structurally (SHA-pinned security allowlists survive,
+attribution stays commit-granular), while the dev-branch model rewrites them
+on landing and pays for it in ceremony. Teams with protected trunks and
+review gates are exactly who a review workstation is for, so the provider
+contract stays first-class:
+
+- the UI renders stacked PRs, gates the measured lines on the provider
+  actually supplying them, and reports unwired measurement honestly — all in
+  place today;
+- `TUIPR_QUEUE_CMD` plugs in any producer emitting the contract's JSON;
+- the next step is **documenting that JSON contract publicly**, so an
+  organization can write its own producer without reading our source.
+
 ## M2 — Decoupling and English ✅
 
 - [x] Workplace-specific vocabulary removed — done before the first public
