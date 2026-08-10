@@ -1,0 +1,38 @@
+{
+  "name": "tuigh",
+  "version": "0.0.1",
+  "description": "Alias of tuipr — terminal review workstation for agent-generated PRs. Install this, get tuipr.",
+  "keywords": [
+    "tui",
+    "terminal",
+    "pull-request",
+    "code-review",
+    "github",
+    "tuipr"
+  ],
+  "homepage": "https://github.com/sarimarton/tuipr#readme",
+  "bugs": {
+    "url": "https://github.com/sarimarton/tuipr/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/sarimarton/tuipr.git",
+    "directory": "tuigh"
+  },
+  "license": "MIT",
+  "author": "Márton Sári",
+  "type": "module",
+  "bin": {
+    "tuigh": "bin/tuigh.mjs"
+  },
+  "files": [
+    "bin",
+    "README.md"
+  ],
+  "dependencies": {
+    "tuipr": "^0.0.1"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
