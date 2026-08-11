@@ -23,7 +23,8 @@
   "author": "Márton Sári",
   "type": "module",
   "bin": {
-    "tuipr": "bin/tuipr.mjs"
+    "tuipr": "bin/tuipr.mjs",
+    "tuigh": "bin/tuipr.mjs"
   },
   "files": [
     "bin",

@@ -76,6 +76,14 @@ contract stays first-class:
 - the next step is **documenting that JSON contract publicly**, so an
   organization can write its own producer without reading our source.
 
+**Naming note, recorded for any future rename debate:** the bare npm name
+`tuigh` cannot be published by anyone — the registry's typosquat rule rejects
+it as too similar to `twig`. That cuts both ways: the name needs no defensive
+squat on npm, and a rename to it could never own the bare install name, only
+`@sarimarton/tuigh`. The five-character command exists anyway: this package
+installs its binary as both `tuipr` and `tuigh`, the ripgrep pattern with no
+second package to maintain.
+
 ## M2 — Decoupling and English ✅
 
 - [x] Workplace-specific vocabulary removed — done before the first public
